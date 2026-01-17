@@ -28,8 +28,21 @@ class AudioStegoApp:
     def __init__(self, root):
         self.root = root
         self.root.title("Audio Steganography Studio")
-        self.root.geometry("1000x900")
-        self.root.minsize(800, 700)
+        
+        # Dynamic sizing based on screen resolution
+        screen_width = root.winfo_screenwidth()
+        screen_height = root.winfo_screenheight()
+        
+        # Use 70% of screen size, with min/max bounds
+        win_width = int(screen_width * 0.5)
+        win_height = int(screen_height * 0.85)
+        
+        # Center the window on screen
+        x_pos = (screen_width - win_width) // 2
+        y_pos = (screen_height - win_height) // 2
+        
+        self.root.geometry(f"{win_width}x{win_height}+{x_pos}+{y_pos}")
+        self.root.minsize(800, 650)
 
         # Apply a clean theme and configure scaling
         style = ttk.Style()
@@ -58,6 +71,34 @@ class AudioStegoApp:
         self.play_thread = None
         self.decode_thread = None
         self.exiting = False
+        
+        # Echo Hiding Parameters (configurable via advanced settings)
+        self.echo_chunk_size = tk.IntVar(value=512)
+        self.echo_delay_0 = tk.IntVar(value=100)
+        self.echo_delay_1 = tk.IntVar(value=150)
+        self.echo_alpha = tk.DoubleVar(value=0.6)
+        
+        # Magic bytes for file type detection
+        self.MAGIC_BYTES = {
+            b'\x89PNG': ('.png', 'PNG Image'),
+            b'\xFF\xD8\xFF': ('.jpg', 'JPEG Image'),
+            b'GIF87a': ('.gif', 'GIF Image'),
+            b'GIF89a': ('.gif', 'GIF Image'),
+            b'%PDF': ('.pdf', 'PDF Document'),
+            b'PK\x03\x04': ('.zip', 'ZIP Archive'),
+            b'PK\x05\x06': ('.zip', 'ZIP Archive (empty)'),
+            b'Rar!\x1a\x07': ('.rar', 'RAR Archive'),
+            b'RIFF': ('.wav', 'WAV Audio'),
+            b'\x00\x00\x00\x1c': ('.mp4', 'MP4 Video'),
+            b'\x00\x00\x00\x20': ('.mp4', 'MP4 Video'),
+            b'ID3': ('.mp3', 'MP3 Audio'),
+            b'\xff\xfb': ('.mp3', 'MP3 Audio'),
+            b'\x1f\x8b': ('.gz', 'GZIP Archive'),
+            b'BM': ('.bmp', 'BMP Image'),
+            b'\x00\x00\x01\x00': ('.ico', 'ICO Icon'),
+            b'MZ': ('.exe', 'Windows Executable'),
+            b'\x7fELF': ('.elf', 'Linux Executable'),
+        }
         
         # Handle window closing properly to prevent lingering threads/callbacks
         self.root.protocol("WM_DELETE_WINDOW", self.on_closing)
@@ -166,6 +207,53 @@ class AudioStegoApp:
 
         self.status_lbl = ttk.Label(algo_frame, text="Waiting for inputs...", style="Bold.TLabel", foreground="#d9534f")
         self.status_lbl.grid(row=2, column=0, columnspan=2, sticky="w", pady=(5, 0))
+        
+        # --- Advanced Settings (Echo Hiding) ---
+        self.advanced_frame = ttk.Frame(algo_frame, padding=5)
+        self.advanced_frame.grid(row=3, column=0, columnspan=2, sticky="ew", pady=(10, 0))
+        self.advanced_frame.columnconfigure(1, weight=1)
+        self.advanced_visible = False
+        self.advanced_content = ttk.Frame(self.advanced_frame)
+        
+        # Toggle button (indicates this is for Echo Hiding)
+        self.btn_toggle_advanced = ttk.Button(self.advanced_frame, text="▶ Echo Hiding: Show Advanced Settings", command=self.toggle_advanced_settings)
+        self.btn_toggle_advanced.grid(row=0, column=0, columnspan=2, sticky="w")
+        
+        # Hidden content frame (shown when expanded)
+        # Chunk Size
+        ttk.Label(self.advanced_content, text="Chunk Size:").grid(row=0, column=0, sticky="w", pady=3)
+        self.spin_chunk = ttk.Spinbox(self.advanced_content, from_=128, to=2048, increment=64, textvariable=self.echo_chunk_size, width=8)
+        self.spin_chunk.grid(row=0, column=1, sticky="w", padx=5)
+        ttk.Label(self.advanced_content, text="Samples per bit. Smaller = more capacity, less reliability.", font=("Segoe UI", 8), foreground="#666").grid(row=0, column=2, sticky="w", padx=5)
+        
+        # Delay 0
+        ttk.Label(self.advanced_content, text="Delay 0:").grid(row=1, column=0, sticky="w", pady=3)
+        self.spin_d0 = ttk.Spinbox(self.advanced_content, from_=4, to=128, increment=4, textvariable=self.echo_delay_0, width=8)
+        self.spin_d0.grid(row=1, column=1, sticky="w", padx=5)
+        ttk.Label(self.advanced_content, text="Echo delay (samples) for bit 0. Keep well below chunk size.", font=("Segoe UI", 8), foreground="#666").grid(row=1, column=2, sticky="w", padx=5)
+        
+        # Delay 1
+        ttk.Label(self.advanced_content, text="Delay 1:").grid(row=2, column=0, sticky="w", pady=3)
+        self.spin_d1 = ttk.Spinbox(self.advanced_content, from_=8, to=256, increment=8, textvariable=self.echo_delay_1, width=8)
+        self.spin_d1.grid(row=2, column=1, sticky="w", padx=5)
+        ttk.Label(self.advanced_content, text="Echo delay (samples) for bit 1. Should differ from Delay 0.", font=("Segoe UI", 8), foreground="#666").grid(row=2, column=2, sticky="w", padx=5)
+        
+        # Alpha
+        ttk.Label(self.advanced_content, text="Alpha:").grid(row=3, column=0, sticky="w", pady=3)
+        self.scale_alpha = ttk.Scale(self.advanced_content, from_=0.1, to=0.6, variable=self.echo_alpha, orient="horizontal", length=100)
+        self.scale_alpha.grid(row=3, column=1, sticky="w", padx=5)
+        self.lbl_alpha_val = ttk.Label(self.advanced_content, text="0.30", width=5)
+        self.lbl_alpha_val.grid(row=3, column=2, sticky="w")
+        ttk.Label(self.advanced_content, text="Echo strength. Higher = more detectable but may be audible.", font=("Segoe UI", 8), foreground="#666").grid(row=3, column=3, sticky="w", padx=5)
+        
+        # Bind alpha scale to update label
+        self.scale_alpha.configure(command=self.update_alpha_label)
+        
+        # Bind chunk size changes to update capacity
+        self.echo_chunk_size.trace_add("write", lambda *args: self.update_capacity_check())
+        
+        # Reset to defaults button
+        ttk.Button(self.advanced_content, text="Reset to Defaults", command=self.reset_echo_defaults).grid(row=4, column=0, columnspan=2, sticky="w", pady=(10, 0))
 
         # 3. Controls
         ctrl_frame = ttk.LabelFrame(self.tab_encode, text=" 3. Actions ", padding=15)
@@ -203,6 +291,36 @@ class AudioStegoApp:
     def on_algo_change(self, event):
         self.update_capacity_check()
         self.update_algo_description()
+        # Auto-update preview if possible
+        if self.audio_data is not None:
+             # Use a thread to avoid freezing UI for large files
+             threading.Thread(target=self.generate_preview, daemon=True).start()
+
+
+    
+    def toggle_advanced_settings(self):
+        """Toggle visibility of the advanced settings panel."""
+        if self.advanced_visible:
+            self.advanced_content.grid_forget()
+            self.btn_toggle_advanced.config(text="▶ Echo Hiding: Show Advanced Settings")
+            self.advanced_visible = False
+        else:
+            self.advanced_content.grid(row=1, column=0, columnspan=2, sticky="ew", pady=(5, 0))
+            self.btn_toggle_advanced.config(text="▼ Echo Hiding: Hide Advanced Settings")
+            self.advanced_visible = True
+    
+    def update_alpha_label(self, val):
+        """Update the alpha value display label."""
+        self.lbl_alpha_val.config(text=f"{float(val):.2f}")
+    
+    def reset_echo_defaults(self):
+        """Reset echo hiding parameters to default values."""
+        self.echo_chunk_size.set(512)
+        self.echo_delay_0.set(16)
+        self.echo_delay_1.set(32)
+        self.echo_alpha.set(0.3)
+        self.lbl_alpha_val.config(text="0.30")
+        self.update_capacity_check()
 
     def reset_plots(self):
         self.ax1.clear()
@@ -287,11 +405,10 @@ class AudioStegoApp:
         ttk.Button(btn_dec_audio_box, text="■ Stop", command=self.stop_audio).pack(side="left", padx=2)
 
         # Algo Select
-        ttk.Label(dec_frame, text="Algorithm used:").grid(row=1, column=0, sticky="w", pady=10)
-        self.decode_algo_var = tk.StringVar(value="LSB (Least Significant Bit)")
-        self.decode_menu = ttk.Combobox(dec_frame, textvariable=self.decode_algo_var, state="readonly")
-        self.decode_menu['values'] = ("LSB (Least Significant Bit)", "Echo Hiding", "Phase Coding")
-        self.decode_menu.grid(row=1, column=1, sticky="ew", padx=10)
+        ttk.Label(dec_frame, text="Algorithm:").grid(row=1, column=0, sticky="w", pady=10)
+        ttk.Label(dec_frame, text="Auto-Detected from Smart Header", font=("Segoe UI", 9, "italic"), foreground="#555").grid(row=1, column=1, sticky="w", padx=10)
+        # self.decode_algo_var was used but logic now ignores it
+
 
         # Action
         self.btn_extract = ttk.Button(dec_frame, text="Extract Hidden File", command=self.extract_file, state="disabled")
@@ -326,6 +443,8 @@ class AudioStegoApp:
                 self.processed_audio = None 
                 self.update_capacity_check()
                 self.update_plots()
+                # Trigger auto-preview
+                threading.Thread(target=self.generate_preview, daemon=True).start()
             except Exception as e:
                 messagebox.showerror("Error", str(e))
 
@@ -336,6 +455,8 @@ class AudioStegoApp:
             size_kb = os.path.getsize(path) / 1024
             self.lbl_payload.config(text=f"{os.path.basename(path)} ({size_kb:.2f} KB)", foreground="#28a745")
             self.update_capacity_check()
+            # Trigger auto-preview
+            threading.Thread(target=self.generate_preview, daemon=True).start()
 
     def load_decode_audio(self):
         path = filedialog.askopenfilename(filetypes=[("WAV files", "*.wav")])
@@ -361,11 +482,12 @@ class AudioStegoApp:
         algo = self.algo_var.get()
         desc = ""
         if "LSB" in algo:
-            desc = "Best for: Capacity. Fragile. 1 bit/sample."
+            desc = "Best for: Capacity. Fragile. 1 bit per sample."
         elif "Echo Hiding" in algo:
-            desc = "Best for: Robustness. Adds tiny echoes (1 bit/2048 samples)."
+            chunk = self.echo_chunk_size.get()
+            desc = f"Best for: Robustness. Adds tiny echoes (1 bit per {chunk} samples)."
         elif "Phase Coding" in algo:
-            desc = "Best for: Imperceptibility. Hides in Phase (1 bit/512 samples)."
+            desc = "Best for: Imperceptibility. Hides in Phase (8 bits per 256 samples)."
         self.algo_desc_lbl.config(text=desc)
 
     def get_max_kb(self):
@@ -381,17 +503,59 @@ class AudioStegoApp:
             # 1 bit per sample -> bytes = samples // 8
             bytes_avail = (total_samples // 8) - header_bytes
         elif "Echo Hiding" in algo:
-            # 1 bit per chunk (chunk_len)
-            chunk_len = 1024
+            # 1 bit per chunk (configurable chunk size)
+            chunk_len = self.echo_chunk_size.get()
             bits = total_samples // chunk_len
             bytes_avail = (bits // 8) - header_bytes
         elif "Phase Coding" in algo:
-            # encoder stores 1 byte per segment (8 bits/segment)
+            # encoder stores 8 bits per segment
             segment_len = 256
             bytes_avail = (total_samples // segment_len) - header_bytes
 
         # Return KB available
         return max(0, bytes_avail / 1024)
+
+    # --- Smart Header Logic (Standard) ---
+    
+    def create_smart_header(self, algo_id, param1, param2, param3, payload_len):
+        """Create a robust configuration header.
+        Structure (15 bytes): 
+        [Magic(2)] [Algo(1)] [P1(2)] [P2(2)] [P3(2)] [Len(4)] [CRC(2)]
+        """
+        magic = b'st'
+        data = struct.pack('<2sBHHHI', magic, algo_id, param1, param2, param3, payload_len)
+        checksum = sum(data) & 0xFFFF
+        full_header = data + struct.pack('<H', checksum)
+        return full_header
+
+    HEADER_OFFSET = 1000
+
+    def calculate_header_offset(self):
+        return self.HEADER_OFFSET
+
+    def read_smart_header(self, audio):
+        """Read standard 15-byte Smart Header."""
+        try:
+            header_len = 15
+            bits_needed = header_len * 8
+            
+            if len(audio) < bits_needed: return None
+            
+            header_bits = audio[:bits_needed] & 1
+            header_bytes = np.packbits(header_bits).tobytes()
+            
+            magic, algo_id, p1, p2, p3, length, crc = struct.unpack('<2sBHHHIH', header_bytes)
+            
+            if magic != b'st': return None
+            
+            data_part = header_bytes[:-2]
+            calc_crc = sum(data_part) & 0xFFFF
+            if calc_crc != crc: return None
+            
+            return {'algo_id': algo_id, 'p1': p1, 'p2': p2, 'p3': p3, 'payload_len': length}
+            
+        except Exception:
+            return None
 
     def update_capacity_check(self, event=None):
         if not self.carrier_path: return
@@ -416,339 +580,281 @@ class AudioStegoApp:
             self.btn_play_stego.state(['!disabled'])
 
     def process_steganography(self):
+        """Encode payload using Standard Protocol (Fixed Offset)."""
         if self.audio_data is None or self.payload_path is None: return None
 
+        # 1. Load Payload
         with open(self.payload_path, 'rb') as f:
             data = f.read()
-        length_header = struct.pack('<I', len(data))
-        raw_bytes = length_header + data
+        payload_len = len(data)
+
+        # 2. Prepare Bits
+        byte_array = np.frombuffer(data, dtype=np.uint8)
+        bits_to_encode = np.unpackbits(byte_array)
         
-        byte_array = np.frombuffer(raw_bytes, dtype=np.uint8)
-        bits = np.unpackbits(byte_array)
-
-        # Add a short preamble for sync in robust modes (Echo / Phase)
-        # Preamble: 8 bytes of 0xAA (10101010) -> 64 bits
-        preamble = np.unpackbits(np.frombuffer(b'\xAA'*8, dtype=np.uint8))
-        algo = self.algo_var.get()
-        if "Echo" in algo or "Phase" in algo:
-            bits = np.concatenate([preamble, bits])
-
-        algo = self.algo_var.get()
         audio_copy = self.audio_data.copy()
-
-        # Hybrid: for Echo/Phase, reserve an LSB-redundant header at the start
-        # Header contents: 4 bytes payload length, 4 bytes start_chunk
-        if "Echo" in algo or "Phase" in algo:
-            # We will compute start_chunk inside encoder; for now choose placeholder 0
-            # Encoder will return stego audio with chosen start_chunk embedded via LSB header
-            pass
-        # Enforce max bits that can be embedded based on carrier size
-        if "Echo Hiding" in algo:
-            chunk_len = 1024
-            max_bits = len(audio_copy) // chunk_len
-            if len(bits) > max_bits:
-                bits = bits[:max_bits]
-        elif "Phase Coding" in algo:
-            segment_len = 256
-            max_bits = (len(audio_copy) // segment_len) * 8
-            if len(bits) > max_bits:
-                bits = bits[:max_bits]
-        else:
-            # LSB: 1 bit per sample
-            max_bits = len(audio_copy)
-            if len(bits) > max_bits:
-                bits = bits[:max_bits]
-
-        if "LSB" in algo:
-            return self.algo_lsb_encode(audio_copy, bits)
-        elif "Echo Hiding" in algo:
-            # Encode with echo; pass payload length so encoder can write LSB header
-            return self.algo_echo_encode(audio_copy, bits, payload_len=len(data))
-        elif "Phase Coding" in algo:
-            return self.algo_phase_encode(audio_copy, bits, payload_len=len(data))
+        algo_name = self.algo_var.get()
+        start_offset = self.HEADER_OFFSET
+        
+        # Determine Algo & Params
+        algo_id = 1
+        p1, p2, p3 = 0, 0, 0
+        
+        if "Echo" in algo_name:
+            algo_id = 2
+            p1 = self.echo_chunk_size.get()
+            p2 = self.echo_delay_0.get()
+            p3 = self.echo_delay_1.get()
+        elif "Phase" in algo_name:
+            algo_id = 3
+            p1 = 256 # Segment
+            p2 = 20  # Start Bin
+            p3 = 0
+            
+        # Create Header
+        header = self.create_smart_header(algo_id, p1, p2, p3, payload_len)
+        header_bits = np.unpackbits(np.frombuffer(header, dtype=np.uint8))
+        
+        # Write Header (starts at 0)
+        if len(audio_copy) < len(header_bits) + start_offset:
+            self.update_status("Error: Audio too short.")
+            return None
+            
+        audio_copy[:len(header_bits)] = (audio_copy[:len(header_bits)] & ~1) | header_bits
+        
+        # Encode Body (starts at 1000)
+        if algo_id == 2: # Echo
+            return self.algo_echo_encode(audio_copy, bits_to_encode, start_offset=start_offset, payload_len=payload_len)
+        elif algo_id == 3: # Phase
+            return self.algo_phase_encode(audio_copy, bits_to_encode, start_offset=start_offset)
+        elif algo_id == 1: # LSB
+            return self.algo_lsb_encode(audio_copy, bits_to_encode, start_index=start_offset)
         
         return audio_copy
 
+    def generate_preview(self):
+        if self.audio_data is None: return
+        
+        # Simplified preview (dummy data)
+        dummy_len = 512
+        audio_copy = self.audio_data.copy()
+        algo_name = self.algo_var.get()
+        start_offset = self.HEADER_OFFSET
+        
+        # Just write dummy LSB header for visual confidence
+        # Use defaults for preview
+        algo_id = 1
+        p1=0; p2=0; p3=0
+        if "Echo" in algo_name: 
+            algo_id = 2
+            p1=self.echo_chunk_size.get(); p2=100; p3=150
+        elif "Phase" in algo_name: 
+            algo_id = 3
+            p1=256; p2=20
+            
+        header = self.create_smart_header(algo_id, p1, p2, p3, dummy_len)
+        header_bits = np.unpackbits(np.frombuffer(header, dtype=np.uint8))
+        audio_copy[:len(header_bits)] = (audio_copy[:len(header_bits)] & ~1) | header_bits
+        
+        # Generate dummy bits
+        bits = np.random.randint(0, 2, 1000)
+        
+        try:
+            if algo_id == 2:
+                self.processed_audio = self.algo_echo_encode(audio_copy, bits, start_offset=start_offset, payload_len=125)
+            elif algo_id == 3:
+                self.processed_audio = self.algo_phase_encode(audio_copy, bits, start_offset=start_offset)
+            else:
+                self.processed_audio = self.algo_lsb_encode(audio_copy, bits, start_index=start_offset)
+                
+            self.root.after(0, self.update_plots)
+        except Exception as e:
+            print(f"Preview Error: {e}")
+
+
     # --- Encoding Algorithms ---
 
-    def algo_lsb_encode(self, audio, bits):
-        n_bits = len(bits)
-        if n_bits > len(audio): bits = bits[:len(audio)]
-        audio[:len(bits)] = (audio[:len(bits)] & ~1) | bits
+    def algo_lsb_encode(self, audio, bits, start_index=0):
+        """LSB Encoding: Replace least significant bit."""
+        num_bits = len(bits)
+        available = len(audio) - start_index
+        
+        if num_bits > available:
+            bits = bits[:available]
+            
+        audio[start_index:start_index+len(bits)] = (audio[start_index:start_index+len(bits)] & ~1) | bits
         return audio
 
-    def algo_echo_encode(self, audio, bits, forced_start_chunk=None, payload_len=None):
-        """Echo Hiding:
-        More compact: Chunk size 1024, low alpha to reduce audibility.
-        Bit 0 -> short delay (32 samples), Bit 1 -> longer delay (64 samples).
+    def _create_mixer_signal(self, bits, chunk_size, smooth_len):
+        """Generate smooth mixer signal (Matlab port).
+        
+        Upsamples bits to chunk_size and smooths with Hanning window.
+        Returns: array of length len(bits)*chunk_size with values in [0, 1].
         """
-        chunk_len = 1024
-        d0 = 32
-        d1 = 64
-        alpha = 0.12
+        # 1. Expand bits (0/1) to square wave
+        # bits: [0, 1, 0] -> [000... 111... 000...]
+        raw_signal = np.repeat(bits, chunk_size).astype(np.float32)
+        
+        # 2. Smooth with Hanning window (Convolution)
+        # smooth_len (K) should be even for symmetry in Matlab logic, but odd is fine for numpy 'same'
+        if smooth_len < 1: smooth_len = 1
+        window = np.hanning(smooth_len)
+        
+        # Convolve (mode='same' returns centered result of same size as raw_signal)
+        smoothed = np.convolve(raw_signal, window, mode='same')
+        
+        # 3. Normalize to [0, 1]
+        mx = np.max(np.abs(smoothed))
+        if mx > 0:
+            smoothed /= mx
+            
+        # 4. Clipping/Safety (ensure strict 0-1 range)
+        return np.clip(smoothed, 0.0, 1.0)
 
-        n_bits = len(bits)
-        audio_len = len(audio)
-
+    def algo_echo_encode(self, audio, bits, start_offset=1000, payload_len=None):
+        """True Echo Hiding (Mixer Method):
+        
+        Generates two continuous echo signals (d0, d1) and blends them
+        using a smoothed mixer signal derived from the bit sequence.
+        
+        Matlab Reference Idea:
+        output = signal + (echo0 * (1-mix)) + (echo1 * mix)
+        """
+        chunk_size = self.echo_chunk_size.get() # L
+        d0 = self.echo_delay_0.get()            # d0
+        d1 = self.echo_delay_1.get()            # d1
+        alpha = self.echo_alpha.get()           # alpha
+        
+        # Matlab default K = L/4
+        smooth_len = chunk_size // 4
+        
+        # Total length needed for payload
+        num_bits = len(bits)
+        total_samples = num_bits * chunk_size
+        
+        # Check bounds
+        if start_offset + total_samples > len(audio):
+            # Truncate bits if needed
+            available = len(audio) - start_offset
+            num_bits = available // chunk_size
+            bits = bits[:num_bits]
+            total_samples = num_bits * chunk_size
+            if total_samples <= 0: return audio
+            
+        # 1. Generate Mixer Signal
+        mix = self._create_mixer_signal(bits, chunk_size, smooth_len)
+        inv_mix = 1.0 - mix
+        
+        # 2. Extract Source Region
+        # We need the source audio for the entire region + padding for delays
+        # To avoid index errors, we'll process 'in place' efficiently
+        
+        # We need echo0 and echo1 for the region [start_offset : start_offset + total_samples]
+        # Echo0 comes from source[i - d0]
+        # Echo1 comes from source[i - d1]
+        
+        # Let's create shifted buffers efficiently
+        # This assumes d0, d1 are small compared to available audio before start_offset?
+        # start_offset is 1000. d1 is 150. So we are fine (1000 > 150).
+        
+        region_start = start_offset
+        region_end = start_offset + total_samples
+        
+        source_region = audio[region_start : region_end].astype(np.float32)
+        
+        # Echo 0 Source: [start - d0 : end - d0]
+        e0_start = region_start - d0
+        e0_end = region_end - d0
+        echo0 = audio[e0_start : e0_end].astype(np.float32) * alpha
+        
+        # Echo 1 Source: [start - d1 : end - d1]
+        e1_start = region_start - d1
+        e1_end = region_end - d1
+        echo1 = audio[e1_start : e1_end].astype(np.float32) * alpha
+        
+        # 3. Mix
+        # added_echo = E0*(1-mix) + E1*mix
+        added_echo = (echo0 * inv_mix) + (echo1 * mix)
+        
+        # 4. Add to Original
         output = audio.copy().astype(np.float32)
-
-        # If we cannot fit all bits, encode as many as we can (calling code truncates)
-        max_bits = audio_len // chunk_len
-        if n_bits > max_bits:
-            n_bits = max_bits
-
-        # Find a good starting chunk where the echo source region has energy
-        # This avoids encoding header into leading silence. If the caller
-        # provides a forced_start_chunk we use that.
-        if forced_start_chunk is not None:
-            start_chunk = int(forced_start_chunk)
-        else:
-            energies = np.zeros(max_bits, dtype=np.float32)
-            for i in range(max_bits):
-                s = i * chunk_len
-                e = s + chunk_len
-                p_start = s - d0
-                p_end = e - d0
-                src_s = max(0, p_start)
-                src_e = min(audio_len, p_end)
-                if src_e > src_s:
-                    energies[i] = np.mean(np.abs(audio[src_s:src_e].astype(np.float32)))
-                else:
-                    energies[i] = 0.0
-
-            median_energy = np.median(energies) if len(energies) > 0 else 0.0
-            start_chunk = 0
-            if median_energy > 0:
-                thresh = max(1.0, median_energy * 0.1)
-                candidates = np.where(energies >= thresh)[0]
-                if candidates.size > 0:
-                    start_chunk = int(candidates[0])
-
-            # Ensure we place payload after a reserved LSB header area
-            header_redundancy_samples = 2048
-            header_bitlen = 8 * 8  # 8 bytes (content len + start_chunk)
-            min_start_chunks = math.ceil(header_redundancy_samples / chunk_len)
-            if start_chunk < min_start_chunks:
-                start_chunk = min_start_chunks
-
-            # If payload_len provided, write redundant LSB header and full raw bytes
-            if payload_len is not None:
-                try:
-                    # bits contains: [preamble (64 bits)] + [4-byte length + payload bytes]
-                    preamble_len = 64
-                    raw_bitlen = (4 + int(payload_len)) * 8
-                    raw_bits = bits[preamble_len : preamble_len + raw_bitlen]
-
-                    # reconstruct raw bytes (4-byte length + payload)
-                    raw_bytes = np.packbits(raw_bits).tobytes()
-
-                    # Build an explicit 8-byte LSB backup header: (content_len, start_chunk)
-                    header_bytes = struct.pack('<II', int(payload_len), int(start_chunk))
-                    payload_only = raw_bytes[4:]
-                    backup_bytes = header_bytes + payload_only
-                    backup_bits = np.unpackbits(np.frombuffer(backup_bytes, dtype=np.uint8))
-
-                    # First, write a small 8-byte header repeated across the first 2048 samples
-                    small_header_bits = np.unpackbits(np.frombuffer(header_bytes, dtype=np.uint8))
-                    small_reps = 2048 // small_header_bits.size
-                    small_tile = np.tile(small_header_bits, small_reps)
-
-                    out_int = output.astype(np.int16)
-                    if out_int.ndim == 1:
-                        n0 = min(len(small_tile), out_int.shape[0])
-                        out_int[:n0] = (out_int[:n0] & ~1) | small_tile[:n0]
-                    else:
-                        n0 = min(len(small_tile), out_int.shape[0])
-                        ch0 = out_int[:n0, 0]
-                        ch0 = (ch0 & ~1) | small_tile[:n0]
-                        out_int[:n0, 0] = ch0
-
-                    # Now write the full backup after the small header (to avoid clobbering)
-                    header_redundancy_samples = max(2048, len(backup_bits))
-                    reps = header_redundancy_samples // len(backup_bits)
-                    if reps >= 1:
-                        repeated = np.tile(backup_bits, reps)
-                        n = min(len(repeated), out_int.shape[0] - 2048)
-                        if out_int.ndim == 1:
-                            start = 2048
-                            out_int[start:start+n] = (out_int[start:start+n] & ~1) | repeated[:n]
-                        else:
-                            start = 2048
-                            ch0 = out_int[start:start+n, 0]
-                            ch0 = (ch0 & ~1) | repeated[:n]
-                            out_int[start:start+n, 0] = ch0
-
-                    output[:out_int.shape[0]] = out_int[:out_int.shape[0]]
-                except Exception:
-                    pass
-
-        # Hanning window to reduce edge artifacts
-        window = np.hanning(chunk_len)
-
-        # Ensure we don't walk off the end when applying the start offset
-        available_slots = max_bits - start_chunk
-        if n_bits > available_slots:
-            n_bits = available_slots
-        # If a preamble exists (we prepend a 64-bit 0xAA pattern), boost its alpha
-        preamble_len = min(64, n_bits)
-        alpha_preamble = 0.5
-
-        for bit_index in range(n_bits):
-            i = start_chunk + bit_index
-            start = i * chunk_len
-            end = start + chunk_len
-
-            if end > audio_len:
-                break
-
-            bit = int(bits[bit_index])
-            delay = d1 if bit == 1 else d0
-            # use stronger echo for preamble bits to aid detection
-            use_alpha = alpha_preamble if bit_index < preamble_len else alpha
-
-            p_start = start - delay
-            p_end = end - delay
-
-            # Zero-padded echo buffer
-            echo_signal = np.zeros(chunk_len, dtype=np.float32)
-
-            src_start = max(0, p_start)
-            src_end = min(audio_len, p_end)
-
-            if src_end > src_start:
-                dest_start = 0 if p_start >= 0 else (-p_start)
-                dest_end = dest_start + (src_end - src_start)
-                echo_signal[dest_start:dest_end] = audio[src_start:src_end].astype(np.float32)
-
-                # Apply window to both original region and echo to reduce spectral leakage
-                sig = echo_signal * window
-                output[start:end] += use_alpha * sig
-
+        output[region_start : region_end] += added_echo
+        
         return np.clip(output, -32768, 32767).astype(np.int16)
 
-    def algo_phase_encode(self, audio, bits, forced_start_seg=None, payload_len=None):
-        """Phase Coding: smaller segments for higher capacity.
-        Uses small phase shifts to encode bits in a set of frequency bins.
+    def algo_phase_encode(self, audio, bits, start_offset=1000):
+        """True Phase Coding: Encode bits in the phase of frequency bins.
+        
+        Uses direct block processing (no overlap) to preserve absolute phase.
+        Bit 0 -> -pi/2 (-90 deg)
+        Bit 1 -> +pi/2 (+90 deg)
+        (Max gap of 180 deg for high robustness)
         """
-        segment_len = 256
-        start_bin = 20
-        n_segments = (len(bits) + 7) // 8
-        max_segments = len(audio) // segment_len
-        if n_segments > max_segments:
-            n_segments = max_segments
-
-        # Find starting segment with sufficient energy for reliable encoding
-        if forced_start_seg is not None:
-            start_seg = int(forced_start_seg)
-        else:
-            energies = np.zeros(max_segments, dtype=np.float32)
-            for i in range(max_segments):
-                s = i * segment_len
-                e = s + segment_len
-                seg = audio[s:e].astype(np.float32)
-                energies[i] = np.mean(np.abs(seg))
-            median_energy = np.median(energies) if energies.size>0 else 0.0
-            start_seg = 0
-            if median_energy > 0:
-                thresh = max(1.0, median_energy * 0.1)
-                cand = np.where(energies >= thresh)[0]
-                if cand.size>0:
-                    start_seg = int(cand[0])
-
-        # Reserve space for LSB header area and write it if payload_len given
-        header_redundancy_samples = 2048
-        header_bitlen = 8 * 8
-        min_start_seg = math.ceil(header_redundancy_samples / segment_len)
-        if start_seg < min_start_seg:
-            start_seg = min_start_seg
-        if payload_len is not None:
-            try:
-                # reconstruct raw bits from bits (bits includes preamble + length + payload)
-                preamble_len = 64
-                raw_bitlen = (4 + int(payload_len)) * 8
-                raw_bits = bits[preamble_len : preamble_len + raw_bitlen]
-
-                # reconstruct raw bytes (4-byte length + payload)
-                raw_bytes = np.packbits(raw_bits).tobytes()
-                # Build explicit 8-byte header (content_len, start_seg)
-                header_bytes = struct.pack('<II', int(payload_len), int(start_seg))
-                payload_only = raw_bytes[4:]
-                backup_bytes = header_bytes + payload_only
-                backup_bits = np.unpackbits(np.frombuffer(backup_bytes, dtype=np.uint8))
-
-                # small header repeated in first 2048 samples
-                small_header_bits = np.unpackbits(np.frombuffer(header_bytes, dtype=np.uint8))
-                small_reps = 2048 // small_header_bits.size
-                small_tile = np.tile(small_header_bits, small_reps)
-
-                out_int = audio.astype(np.int16)
-                if out_int.ndim == 1:
-                    n0 = min(len(small_tile), out_int.shape[0])
-                    out_int[:n0] = (out_int[:n0] & ~1) | small_tile[:n0]
-                else:
-                    n0 = min(len(small_tile), out_int.shape[0])
-                    ch0 = out_int[:n0, 0]
-                    ch0 = (ch0 & ~1) | small_tile[:n0]
-                    out_int[:n0, 0] = ch0
-
-                header_redundancy_samples = max(2048, len(backup_bits))
-                reps = header_redundancy_samples // len(backup_bits)
-                if reps >= 1:
-                    repeated = np.tile(backup_bits, reps)
-                    n = min(len(repeated), out_int.shape[0] - 2048)
-                    start = 2048
-                    if out_int.ndim == 1:
-                        out_int[start:start+n] = (out_int[start:start+n] & ~1) | repeated[:n]
-                    else:
-                        ch0 = out_int[start:start+n, 0]
-                        ch0 = (ch0 & ~1) | repeated[:n]
-                        out_int[start:start+n, 0] = ch0
-
-                audio[:out_int.shape[0]] = out_int[:out_int.shape[0]]
-            except Exception:
-                pass
-
-        bit_idx = 0
-        # Ensure we don't overrun when starting at start_seg
-        available_segments = max_segments - start_seg
-        if n_segments > available_segments:
-            n_segments = available_segments
-        for seg_i in range(n_segments):
-            i = start_seg + seg_i
-            if i >= max_segments: break
-            s = i * segment_len
-            e = s + segment_len
-            chunk = audio[s:e]
-            if len(chunk) < segment_len: break
-
-            spectrum = np.fft.rfft(chunk)
-            mag = np.abs(spectrum)
+        segment_size = 256
+        start_frequency_bin = 20
+        bits_per_segment = 8
+        min_mag = 500 # Robustness threshold against quantization
+        
+        num_bits = len(bits)
+        audio_length = len(audio)
+        
+        output = audio.copy().astype(np.float64)
+        
+        bit_index = 0
+        current_sample = start_offset
+        
+        while bit_index < num_bits:
+            chunk_start = current_sample
+            chunk_end = chunk_start + segment_size
+            
+            if chunk_end > audio_length:
+                break
+                
+            segment = output[chunk_start:chunk_end]
+            
+            # Transform to frequency domain
+            spectrum = np.fft.rfft(segment)
+            magnitude = np.abs(spectrum)
             phase = np.angle(spectrum)
-
-            for b_offset in range(8):
-                if bit_idx >= len(bits): break
-                bit = int(bits[bit_idx])
-                target = start_bin + b_offset
-                if target >= len(mag): continue
-
-                if mag[target] < 10:
-                    mag[target] = 10
-
-                # Use stronger phase shifts for the preamble (first 64 bits)
-                preamble_bits = min(64, len(bits))
-                if bit_idx < preamble_bits:
-                    target_phase = (np.pi/2) if bit == 1 else (-np.pi/2)
+            
+            # Encode up to 8 bits in this segment
+            for bin_offset in range(bits_per_segment):
+                if bit_index >= num_bits:
+                    break
+                    
+                frequency_bin = start_frequency_bin + bin_offset
+                if frequency_bin >= len(magnitude):
+                    break
+                    
+                # Modify Phase (BPSK)
+                # Boost magnitude if too low to ensure phase survives quantization
+                if magnitude[frequency_bin] < min_mag:
+                    magnitude[frequency_bin] = min_mag
+                    
+                # Set phase: 0 -> -pi/2, 1 -> +pi/2
+                if bits[bit_index] == 0:
+                    phase[frequency_bin] = -np.pi / 2
                 else:
-                    target_phase = (np.pi/4) if bit == 1 else (-np.pi/4)
-                phase[target] = target_phase
-                bit_idx += 1
-
-            new_spec = mag * np.exp(1j * phase)
-            new_chunk = np.fft.irfft(new_spec, n=segment_len)
-
-            audio[s:e] = new_chunk.astype(np.int16)
-
-        return audio
+                    phase[frequency_bin] = np.pi / 2
+                    
+                bit_index += 1
+                
+            # Reconstruct Spectrum
+            # valid rfft is conjugate symmetric, but we only have positive bins here?
+            # numpy.fft.rfft returns only the positive half. irfft handles the rest.
+            # We just need to reconstruct complex spectrum from mag/phase.
+            new_spectrum = magnitude * np.exp(1j * phase)
+            
+            # Inverse Transform
+            new_segment = np.fft.irfft(new_spectrum, n=segment_size)
+            
+            # Overwrite output
+            output[chunk_start:chunk_end] = new_segment
+            
+            # Move to next block
+            current_sample += segment_size
+            
+        return np.clip(output, -32768, 32767).astype(np.int16)
 
     # --- Decoding Logic ---
 
@@ -759,390 +865,196 @@ class AudioStegoApp:
         self.log_txt.config(state="disabled")
 
     def extract_file(self):
+        """Standard Decoder (Stable Protocol)."""
         if self.decode_audio_data is None: return
         
         try:
-            algo = self.decode_algo_var.get()
-            self.log(f"Extracting using {algo}...")
-            
             audio = self.decode_audio_data
             
-            bits = None
-            # Hybrid: first try to read a redundant LSB header stored in the first samples
-            header_valid = False
-            header_len_bytes = 8  # 4 bytes length + 4 bytes start_chunk
-            header_bitlen = header_len_bytes * 8
-            header_redundancy_samples = 2048  # repeat header across this many samples
+            # 1. Read Header
+            header = self.read_smart_header(audio)
+            
+            if not header:
+                self.log("Error: No valid Smart Header found.")
+                return
 
-            if len(audio) >= header_redundancy_samples:
-                lsb_window = (audio[:header_redundancy_samples] & 1).astype(np.uint8)
-                reps = header_redundancy_samples // header_bitlen
-                if reps >= 1:
-                    lsb_window = lsb_window[:reps * header_bitlen].reshape((reps, header_bitlen))
-                    # majority vote across repetitions
-                    votes = np.sum(lsb_window, axis=0)
-                    majority = (votes >= (reps // 2 + 1)).astype(np.uint8)
-                    try:
-                        header_bytes = np.packbits(majority).tobytes()
-                        content_len, start_chunk = struct.unpack('<II', header_bytes)
-                        if 0 < content_len < 100_000_000 and start_chunk >= 0:
-                            header_valid = True
-                            self.log(f"LSB header found: content_len={content_len}, start_chunk={start_chunk}")
-                    except Exception:
-                        header_valid = False
-
-            # If header was valid, prefer using it and decode payload from the start_chunk
-            if header_valid:
-                if "LSB" in algo:
-                    bits = self.algo_lsb_decode(audio)
-                elif "Echo Hiding" in algo:
-                    # Prefer robust LSB backup if present: read full raw bytes from LSB area
-                    try:
-                        # compute required raw bits length (8-byte backup header + payload)
-                        raw_bitlen = (8 + int(content_len)) * 8
-                        header_area = max(2048, raw_bitlen)
-                        # Read the backup area placed after the small header (offset)
-                        start_off = header_redundancy_samples
-                        if len(audio) >= start_off + header_area:
-                            lsb_window = (audio[start_off:start_off+header_area] & 1).astype(np.uint8)
-                            reps = header_area // raw_bitlen
-                            if reps >= 1:
-                                lsb_window = lsb_window[:reps*raw_bitlen].reshape((reps, raw_bitlen))
-                                votes = np.sum(lsb_window, axis=0)
-                                majority = (votes >= (reps // 2 + 1)).astype(np.uint8)
-                                raw_bytes = np.packbits(majority).tobytes()
-                                # backup format: [4-byte content_len][4-byte start_chunk] + payload
-                                payload_bytes = raw_bytes[8:8+content_len]
-                                # Save payload directly and exit
-                                save_path = filedialog.asksaveasfilename(title="Save Extracted File")
-                                if save_path:
-                                    with open(save_path, 'wb') as f:
-                                        f.write(payload_bytes)
-                                    self.log(f"Success! Saved to {save_path}")
-                                    messagebox.showinfo("Success", "File extracted successfully.")
-                                    return
-                    except Exception:
-                        bits = None
-                    # If backup read failed, fallback to algorithmic decode
-                    if bits is None:
-                        all_bits, all_conf = self.algo_echo_decode_conf(audio)
-                        n_bits_needed = 64 + (content_len * 8)
-                        seg_bits = all_bits[start_chunk : start_chunk + n_bits_needed]
-                        seg_conf = all_conf[start_chunk : start_chunk + n_bits_needed]
-
-                        # Calibrate mapping using the 64-bit preamble (0xAA pattern)
-                        preamble_bits = np.unpackbits(np.frombuffer(b'\xAA'*8, dtype=np.uint8))
-                        pre_len = min(64, len(seg_bits))
-                        if pre_len == 64:
-                            measured = seg_bits[:pre_len].astype(np.uint8)
-                            conf_meas = seg_conf[:pre_len]
-                            # threshold: take median confidence (robust) or percentile
-                            median_conf = float(np.median(conf_meas))
-                            thresh = median_conf if median_conf>1e-9 else np.percentile(conf_meas, 75)
-                            mask = conf_meas >= thresh
-                            if mask.sum() >= max(4, int(pre_len * 0.25)):
-                                matches = int(np.sum(measured[mask] == preamble_bits[mask]))
-                                inv_matches = int(np.sum((1-measured[mask]) == preamble_bits[mask]))
-                                # If inverted mapping matches better, flip all bits
-                                if inv_matches > matches:
-                                    seg_bits = 1 - seg_bits
-                            else:
-                                # fallback: evaluate across full preamble if confident mask is too small
-                                matches = int(np.sum(measured == preamble_bits))
-                                inv_matches = int(np.sum((1-measured) == preamble_bits))
-                                if inv_matches > matches:
-                                    seg_bits = 1 - seg_bits
-
-                            # For low-confidence positions, use a small-window majority filter
-                            low_mask = conf_meas < thresh
-                            if low_mask.any():
-                                for i in np.where(low_mask)[0]:
-                                    # window on the full seg_bits so indices map correctly
-                                    w0 = max(0, i-1)
-                                    w1 = min(len(seg_bits), i+2)
-                                    seg_bits[i] = int(np.round(np.mean(seg_bits[w0:w1])))
-
-                        bits = seg_bits
-                elif "Phase Coding" in algo:
-                    # Prefer robust LSB backup if present
-                    try:
-                        # compute required raw bits length (8-byte backup header + payload)
-                        raw_bitlen = (8 + int(content_len)) * 8
-                        header_area = max(2048, raw_bitlen)
-                        # Read the backup area placed after the small header (offset)
-                        start_off = header_redundancy_samples
-                        if len(audio) >= start_off + header_area:
-                            lsb_window = (audio[start_off:start_off+header_area] & 1).astype(np.uint8)
-                            reps = header_area // raw_bitlen
-                            if reps >= 1:
-                                lsb_window = lsb_window[:reps*raw_bitlen].reshape((reps, raw_bitlen))
-                                votes = np.sum(lsb_window, axis=0)
-                                majority = (votes >= (reps // 2 + 1)).astype(np.uint8)
-                                raw_bytes = np.packbits(majority).tobytes()
-                                payload_bytes = raw_bytes[8:8+content_len]
-                                save_path = filedialog.asksaveasfilename(title="Save Extracted File")
-                                if save_path:
-                                    with open(save_path, 'wb') as f:
-                                        f.write(payload_bytes)
-                                    self.log(f"Success! Saved to {save_path}")
-                                    messagebox.showinfo("Success", "File extracted successfully.")
-                                    return
-                    except Exception:
-                        bits = None
-                    if bits is None:
-                        all_bits, all_conf = self.algo_phase_decode_conf(audio)
-                        n_bits_needed = 64 + (content_len * 8)
-                        # start_chunk stored for Phase is in "segments" units; convert to bits
-                        start_bit = int(start_chunk) * 8
-                        seg_bits = all_bits[start_bit : start_bit + n_bits_needed]
-                        seg_conf = all_conf[start_bit : start_bit + n_bits_needed]
-
-                        preamble_bits = np.unpackbits(np.frombuffer(b'\xAA'*8, dtype=np.uint8))
-                        pre_len = min(64, len(seg_bits))
-                        if pre_len == 64:
-                            measured = seg_bits[:pre_len].astype(np.uint8)
-                            conf_meas = seg_conf[:pre_len]
-                            median_conf = float(np.median(conf_meas))
-                            thresh = median_conf if median_conf>1e-9 else np.percentile(conf_meas, 75)
-                            mask = conf_meas >= thresh
-                            if mask.sum() >= max(4, int(pre_len * 0.25)):
-                                matches = int(np.sum(measured[mask] == preamble_bits[mask]))
-                                inv_matches = int(np.sum((1-measured[mask]) == preamble_bits[mask]))
-                                if inv_matches > matches:
-                                    seg_bits = 1 - seg_bits
-                            low_mask = conf_meas < thresh
-                            if low_mask.any():
-                                for i in np.where(low_mask)[0]:
-                                    w0 = max(0, i-1)
-                                    w1 = min(len(seg_bits), i+2)
-                                    seg_bits[i] = int(np.round(np.mean(seg_bits[w0:w1])))
-                        bits = seg_bits
+            algo_id = header['algo_id']
+            payload_len = header['payload_len']
+            start_offset = self.HEADER_OFFSET
+            
+            self.log(f"Header Found! AlgoID: {algo_id}, Len: {payload_len} bytes")
+            
+            decoded_bits = []
+            
+            if algo_id == 2: # Echo Hiding
+                chunk = header['p1']
+                d0 = header['p2']
+                d1 = header['p3']
+                self.log(f"Algorithm: Echo Hiding (Chunk={chunk}, D0={d0}, D1={d1})")
+                decoded_bits = self.algo_echo_decode(audio, start_offset=start_offset, chunk_size=chunk, d0=d0, d1=d1)
+                
+            elif algo_id == 3: # Phase Coding
+                segment = header['p1']
+                start_bin = header['p2']
+                self.log(f"Algorithm: Phase Coding (Segment={segment}, StartBin={start_bin})")
+                decoded_bits = self.algo_phase_decode(audio, start_offset=start_offset, segment_size=segment, start_bin=start_bin)
+            
+            elif algo_id == 1: # LSB
+                self.log("Algorithm: LSB")
+                decoded_bits = self.algo_lsb_decode(audio, start_index=start_offset)
+                
             else:
-                # Fallback: original behavior (preamble search / whole-file decode)
-                if "LSB" in algo:
-                    bits = self.algo_lsb_decode(audio)
-                elif "Echo Hiding" in algo:
-                    bits = self.algo_echo_decode(audio)
-                elif "Phase Coding" in algo:
-                    bits = self.algo_phase_decode(audio)
-                
-            if bits is None: 
-                self.log("Extraction failed.")
+                self.log(f"Error: Unknown Algorithm ID {algo_id}")
                 return
-            # Try packing bits into bytes. If header fails, we'll attempt bit shifts
-            byte_data = np.packbits(bits)
+
+            # 2. Trim/Process Bits
+            if len(decoded_bits) == 0:
+                 self.log("Error: Decoder returned no data.")
+                 return
+
+            # Debug: Log first few bits
+            preview_bits = decoded_bits[:32]
+            bit_str = ''.join(map(str, preview_bits))
+            self.log(f"Debug - First 32 bits: {bit_str}")
+
+            # 3. Reconstruct Payload
+            total_bits_needed = payload_len * 8
+            if len(decoded_bits) < total_bits_needed:
+                self.log(f"Warning: Extracted {len(decoded_bits)} bits, needed {total_bits_needed}.")
+                decoded_bits = np.pad(decoded_bits, (0, total_bits_needed - len(decoded_bits)))
             
-            if len(byte_data) < 4:
-                self.log("Error: Not enough data.")
-                return
-                
-
-            # Helper: validate header and return content_len or None
-            def read_header(bdata):
-                if len(bdata) < 4: return None
-                try:
-                    ln = struct.unpack('<I', bdata[:4].tobytes())[0]
-                    if ln == 0 or ln > 100_000_000: return None
-                    return ln
-                except Exception:
-                    return None
-
-            content_len = read_header(byte_data)
-
-            # If header invalid, search for preamble pattern (8 bytes of 0xAA -> 64 bits)
-            if content_len is None:
-                preamble_bytes = b'\xAA' * 8
-                pre_bits = np.unpackbits(np.frombuffer(preamble_bytes, dtype=np.uint8))
-                found = False
-
-                # Search for preamble bit sequence in the decoded bits using
-                # an approximate match (allow some bit errors). We pick the
-                # alignment with the highest number of matching bits and
-                # require a strong ratio to accept it.
-                pb_len = len(pre_bits)
-                best_matches = -1
-                best_start = None
-                search_len = max(0, len(bits) - pb_len + 1)
-                for start in range(search_len):
-                    seg = bits[start:start+pb_len]
-                    matches = int(np.sum(seg == pre_bits))
-                    if matches > best_matches:
-                        best_matches = matches
-                        best_start = start
-
-                if best_start is not None and best_matches >= int(pb_len * 0.6):
-                    shifted = bits[best_start + pb_len:]
-                    bdata = np.packbits(shifted)
-                    content_len = read_header(bdata)
-                    if content_len is not None:
-                        bits = shifted
-                        byte_data = bdata
-                        found = True
-                        self.log(f"Header found after preamble approx at bit {best_start} (matches {best_matches}/{pb_len})")
-                    else:
-                        # Try small fine-grained shifts within the window to locate header
-                        max_fine = min(512, len(shifted))
-                        for s2 in range(1, max_fine):
-                            bdata2 = np.packbits(shifted[s2:])
-                            content_len = read_header(bdata2)
-                            if content_len is not None:
-                                bits = shifted[s2:]
-                                byte_data = bdata2
-                                found = True
-                                self.log(f"Header found after preamble approx at bit {best_start}, fine shift {s2}")
-                                break
-
-
-                if not found:
-                    self.log("Error: Header corrupt or wrong algorithm. Tried preamble search and failed.")
-                    return
-
-            self.log(f"Header Valid. Content Length: {content_len} bytes.")
+            payload_bits = decoded_bits[:total_bits_needed]
+            payload_bytes = np.packbits(payload_bits).tobytes()
             
-            if content_len > len(byte_data) - 4:
-                self.log("Error: Payload truncated.")
-                return
-                
-            payload = byte_data[4 : 4 + content_len].tobytes()
-            
-            save_path = filedialog.asksaveasfilename(title="Save Extracted File")
+            # Save File
+            ext = ".bin" # Default
+            for magic, (extension, name) in self.MAGIC_BYTES.items():
+                if payload_bytes.startswith(magic):
+                    ext = extension
+                    self.log(f"Detected File Type: {name} ({extension})")
+                    break
+                    
+            save_path = filedialog.asksaveasfilename(defaultextension=ext, initialfile=f"decoded{ext}")
             if save_path:
                 with open(save_path, 'wb') as f:
-                    f.write(payload)
+                    f.write(payload_bytes)
                 self.log(f"Success! Saved to {save_path}")
-                messagebox.showinfo("Success", "File extracted successfully.")
-
+                
         except Exception as e:
-            self.log(f"Error: {e}")
+            self.log(f"Error extracting: {e}")
+            import traceback
+            traceback.print_exc()
 
-    def algo_lsb_decode(self, audio):
+    
+    def detect_file_type(self, data):
+        """Detect file type from magic bytes.
+        Returns (extension, description) or (None, None) if not detected.
+        """
+        if not data or len(data) < 2:
+            return None, None
+        
+        for magic, (ext, desc) in self.MAGIC_BYTES.items():
+            if data[:len(magic)] == magic:
+                return ext, desc
+        
+        # Check for text file (printable ASCII)
+        try:
+            sample = data[:min(100, len(data))]
+            if all(32 <= b < 127 or b in (9, 10, 13) for b in sample):
+                return '.txt', 'Text File'
+        except Exception:
+            pass
+        
+        return None, None
+
+    def algo_lsb_decode(self, audio, start_index=0):
+        """LSB Decoding: Extract least significant bit of each sample."""
+        if start_index > 0:
+            return audio[start_index:] & 1
         return audio & 1
 
-    def algo_echo_decode(self, audio):
-        """Echo Decoding (compat): returns hard bits. Uses confidence-aware
-        routine under the hood for better results. Keep this for backwards
-        compatibility."""
-        bits, _ = self.algo_echo_decode_conf(audio)
-        return bits
 
-    def algo_echo_decode_conf(self, audio):
-        """Echo Decoding with confidence scores.
-        Returns (bits, conf) where conf is |v1 - v0| per chunk.
+    def algo_echo_decode(self, audio, start_offset=1000, chunk_size=512, d0=100, d1=150):
+        """True Echo Hiding Decode: Use Cepstrum to detect echo delay.
+        
+        Ported from Matlab 'echo_decoding.m'.
+        Method: Real Cepstrum = IFFT(log|FFT(x)|)
+        Logic: if cepstrum[d0] >= cepstrum[d1] -> bit 0, else bit 1.
         """
-        chunk_len = 1024
-        d0 = 32
-        d1 = 64
+        audio_length = len(audio)
+        decoded_bits = []
+        current_sample = start_offset
+        
+        while current_sample + chunk_size <= audio_length:
+            chunk = audio[current_sample:current_sample+chunk_size]
+            
+            # Real Cepstrum Calculation (Matlab Port)
+            # 1. FFT
+            spectrum = np.fft.fft(chunk)
+            # 2. Log Magnitude (add epsilon to avoid log(0))
+            log_mag = np.log(np.abs(spectrum) + 1e-8)
+            # 3. IFFT -> Real part
+            cepstrum = np.abs(np.fft.ifft(log_mag)).real
+            
+            # Precision Check: Matlab uses double precision.
+            val0 = cepstrum[d0]
+            val1 = cepstrum[d1]
+            
+            # DEBUG: Print first few decisions
+            if len(decoded_bits) < 10:
+                print(f"Debug Chunk {len(decoded_bits)}: d0({d0})={val0:.4f}, d1({d1})={val1:.4f} -> {'0' if val0>=val1 else '1'}")
 
-        audio_len = len(audio)
-        n_chunks = audio_len // chunk_len
-        bits = np.zeros(n_chunks, dtype=np.uint8)
-        conf = np.zeros(n_chunks, dtype=np.float32)
+            if val0 >= val1:
+                decoded_bits.append(0)
+            else:
+                decoded_bits.append(1)
+            
+            current_sample += chunk_size
+            
+        return np.array(decoded_bits, dtype=np.uint8)
 
-        window = np.hanning(chunk_len)
-
-        def corr_between(chunk, src):
-            c = (chunk - np.mean(chunk)) * window
-            s = (src - np.mean(src)) * window
-            num = np.sum(c * s)
-            den = np.sqrt(np.sum(c*c) * np.sum(s*s)) + 1e-9
-            return num / den
-
-        for i in range(n_chunks):
-            start = i * chunk_len
-            end = start + chunk_len
-            if end > audio_len: break
-
-            chunk = audio[start:end].astype(np.float32)
-
-            # Build zero-padded source buffer identical to encoder and apply
-            # the same Hanning window before computing the regression.
-            def build_src(delay):
-                p_start = start - delay
-                p_end = end - delay
-                src = np.zeros(chunk_len, dtype=np.float32)
-                src_s = max(0, p_start)
-                src_e = min(audio_len, p_end)
-                if src_e > src_s:
-                    dest_start = 0 if p_start >= 0 else (-p_start)
-                    src[dest_start:dest_start + (src_e - src_s)] = audio[src_s:src_e].astype(np.float32)
-                return src * window
-
-            src0 = build_src(d0)
-            src1 = build_src(d1)
-            c = (chunk.astype(np.float32)) * window
-
-            # Compute least-squares coefficient alpha_hat = sum(c*src) / sum(src*src)
-            denom0 = np.sum(src0 * src0) + 1e-9
-            denom1 = np.sum(src1 * src1) + 1e-9
-            num0 = np.sum(c * src0)
-            num1 = np.sum(c * src1)
-            a0 = float(num0 / denom0)
-            a1 = float(num1 / denom1)
-
-            # Compute normalized residual energy for each hypothesis and pick the smaller.
-            res0 = np.sum((c - a0 * src0) ** 2)
-            res1 = np.sum((c - a1 * src1) ** 2)
-            # normalize by energy to get comparable score
-            energy = np.sum(c * c) + 1e-9
-            r0 = res0 / energy
-            r1 = res1 / energy
-
-            # smaller residual indicates correct hypothesis
-            bits[i] = 1 if r1 < r0 else 0
-            # confidence is the relative residual difference (higher -> more confident)
-            conf[i] = abs(r0 - r1) / (r0 + r1 + 1e-9)
-
-        return bits, conf
-
-    def algo_phase_decode(self, audio):
-        """Phase Coding Decode (compat): returns hard bits. Uses confidence-aware
-        routine under the hood."""
-        bits, _ = self.algo_phase_decode_conf(audio)
-        return bits
-
-    def algo_phase_decode_conf(self, audio):
-        """Phase Coding decode that also returns a confidence per decoded bit.
-        Returns (bits, conf) where conf is the absolute difference in distance
-        between the two candidate phases.
+    def algo_phase_decode(self, audio, start_offset=1000, segment_size=256, start_bin=20):
+        """True Phase Coding Decode: Extract bits from phase angle.
+        
+        Bit 0: Phase < 0 
+        Bit 1: Phase > 0 
         """
-        segment_len = 256
-        start_bin = 20 # Must match encoder
-        n_segments = len(audio) // segment_len
-        bits = []
-        conf = []
-        for i in range(n_segments):
-            s = i * segment_len
-            e = s + segment_len
-            chunk = audio[s:e]
-            if len(chunk) < segment_len: break
-
+        bits_per_segment = 8
+        audio_length = len(audio)
+        decoded_bits = []
+        
+        current_sample = start_offset
+        
+        while current_sample + segment_size <= audio_length:
+            chunk = audio[current_sample:current_sample+segment_size]
+            
+            # FFT
             spectrum = np.fft.rfft(chunk)
-            mag = np.abs(spectrum)
             phase = np.angle(spectrum)
-
-            for b_offset in range(8):
-                target = start_bin + b_offset
-                if target >= len(phase): break
-
-                p = phase[target]
-                # Distances to the two possible encoded phases (payload uses ±pi/4)
-                dist_1 = abs(p - (np.pi/4))
-                dist_0 = abs(p - (-np.pi/4))
-                if dist_1 > np.pi: dist_1 = 2*np.pi - dist_1
-                if dist_0 > np.pi: dist_0 = 2*np.pi - dist_0
-
-                bits.append(1 if dist_1 < dist_0 else 0)
-                conf.append(abs(dist_1 - dist_0))
-
-        return np.array(bits, dtype=np.uint8), np.array(conf, dtype=np.float32)
+            
+            for bin_offset in range(bits_per_segment):
+                frequency_bin = start_bin + bin_offset
+                if frequency_bin >= len(phase):
+                    break
+                    
+                angle = phase[frequency_bin]
+                # Simple decision boundary at 0
+                decoded_bits.append(1 if angle > 0 else 0)
+            
+            # Block stepping (no OLA for robustness)
+            current_sample += segment_size
+            
+        return np.array(decoded_bits, dtype=np.uint8)
 
     # --- Playback/Save ---
-
+    
     def play_audio(self, original=True):
-        if self.is_playing: self.stop_audio()
+        if self.is_playing:
+            self.stop_audio()
         
         if original:
-            if self.audio_data is None: return
+            if self.audio_data is None:
+                return
             data = self.audio_data
             self.update_plots()
         else:
