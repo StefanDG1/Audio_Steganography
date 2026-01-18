@@ -72,11 +72,11 @@ class AudioStegoApp:
         self.decode_thread = None
         self.exiting = False
         
-        # Echo Hiding Parameters (configurable via advanced settings)
-        self.echo_chunk_size = tk.IntVar(value=512)
-        self.echo_delay_0 = tk.IntVar(value=100)
-        self.echo_delay_1 = tk.IntVar(value=150)
-        self.echo_alpha = tk.DoubleVar(value=0.6)
+        # Echo Hiding Parameters
+        self.echo_chunk_size = tk.IntVar(value=2048)
+        self.echo_delay_0 = tk.IntVar(value=50)
+        self.echo_delay_1 = tk.IntVar(value=200)
+        self.echo_alpha = tk.DoubleVar(value=0.5)
         
         # Magic bytes for file type detection
         self.MAGIC_BYTES = {
@@ -196,7 +196,7 @@ class AudioStegoApp:
         ttk.Label(algo_frame, text="Method:").grid(row=0, column=0, sticky="w")
         self.algo_var = tk.StringVar(value="LSB (Least Significant Bit)")
         self.algo_menu = ttk.Combobox(algo_frame, textvariable=self.algo_var, state="readonly")
-        self.algo_menu['values'] = ("LSB (Least Significant Bit)", "Echo Hiding", "Phase Coding")
+        self.algo_menu['values'] = ("LSB (Least Significant Bit)", "Echo Hiding", "Phase Coding", "Spread Spectrum")
         self.algo_menu.grid(row=0, column=1, sticky="ew", padx=10)
         
         # Binds - use a wrapper to ensure both functions fire
@@ -219,40 +219,34 @@ class AudioStegoApp:
         self.btn_toggle_advanced = ttk.Button(self.advanced_frame, text="▶ Echo Hiding: Show Advanced Settings", command=self.toggle_advanced_settings)
         self.btn_toggle_advanced.grid(row=0, column=0, columnspan=2, sticky="w")
         
-        # Hidden content frame (shown when expanded)
         # Chunk Size
         ttk.Label(self.advanced_content, text="Chunk Size:").grid(row=0, column=0, sticky="w", pady=3)
-        self.spin_chunk = ttk.Spinbox(self.advanced_content, from_=128, to=2048, increment=64, textvariable=self.echo_chunk_size, width=8)
+        self.spin_chunk = ttk.Spinbox(self.advanced_content, from_=256, to=8192, increment=256, textvariable=self.echo_chunk_size, width=8)
         self.spin_chunk.grid(row=0, column=1, sticky="w", padx=5)
-        ttk.Label(self.advanced_content, text="Samples per bit. Smaller = more capacity, less reliability.", font=("Segoe UI", 8), foreground="#666").grid(row=0, column=2, sticky="w", padx=5)
+        ttk.Label(self.advanced_content, text="Samples per bit. Smaller = more capacity.", font=("Segoe UI", 8), foreground="#666").grid(row=0, column=2, sticky="w", padx=5)
         
         # Delay 0
         ttk.Label(self.advanced_content, text="Delay 0:").grid(row=1, column=0, sticky="w", pady=3)
-        self.spin_d0 = ttk.Spinbox(self.advanced_content, from_=4, to=128, increment=4, textvariable=self.echo_delay_0, width=8)
+        self.spin_d0 = ttk.Spinbox(self.advanced_content, from_=10, to=500, increment=10, textvariable=self.echo_delay_0, width=8)
         self.spin_d0.grid(row=1, column=1, sticky="w", padx=5)
-        ttk.Label(self.advanced_content, text="Echo delay (samples) for bit 0. Keep well below chunk size.", font=("Segoe UI", 8), foreground="#666").grid(row=1, column=2, sticky="w", padx=5)
+        ttk.Label(self.advanced_content, text="Echo delay for bit 0.", font=("Segoe UI", 8), foreground="#666").grid(row=1, column=2, sticky="w", padx=5)
         
         # Delay 1
         ttk.Label(self.advanced_content, text="Delay 1:").grid(row=2, column=0, sticky="w", pady=3)
-        self.spin_d1 = ttk.Spinbox(self.advanced_content, from_=8, to=256, increment=8, textvariable=self.echo_delay_1, width=8)
+        self.spin_d1 = ttk.Spinbox(self.advanced_content, from_=50, to=1000, increment=50, textvariable=self.echo_delay_1, width=8)
         self.spin_d1.grid(row=2, column=1, sticky="w", padx=5)
-        ttk.Label(self.advanced_content, text="Echo delay (samples) for bit 1. Should differ from Delay 0.", font=("Segoe UI", 8), foreground="#666").grid(row=2, column=2, sticky="w", padx=5)
+        ttk.Label(self.advanced_content, text="Echo delay for bit 1. Should differ from Delay 0.", font=("Segoe UI", 8), foreground="#666").grid(row=2, column=2, sticky="w", padx=5)
         
-        # Alpha
+        # Alpha (changed from slider to spinbox)
         ttk.Label(self.advanced_content, text="Alpha:").grid(row=3, column=0, sticky="w", pady=3)
-        self.scale_alpha = ttk.Scale(self.advanced_content, from_=0.1, to=0.6, variable=self.echo_alpha, orient="horizontal", length=100)
-        self.scale_alpha.grid(row=3, column=1, sticky="w", padx=5)
-        self.lbl_alpha_val = ttk.Label(self.advanced_content, text="0.30", width=5)
-        self.lbl_alpha_val.grid(row=3, column=2, sticky="w")
-        ttk.Label(self.advanced_content, text="Echo strength. Higher = more detectable but may be audible.", font=("Segoe UI", 8), foreground="#666").grid(row=3, column=3, sticky="w", padx=5)
-        
-        # Bind alpha scale to update label
-        self.scale_alpha.configure(command=self.update_alpha_label)
+        self.spin_alpha = ttk.Spinbox(self.advanced_content, from_=0.1, to=1.0, increment=0.1, textvariable=self.echo_alpha, width=8, format="%.2f")
+        self.spin_alpha.grid(row=3, column=1, sticky="w", padx=5)
+        ttk.Label(self.advanced_content, text="Echo strength (0.1-1.0). Higher = more reliable but audible.", font=("Segoe UI", 8), foreground="#666").grid(row=3, column=2, sticky="w", padx=5)
         
         # Bind chunk size changes to update capacity
         self.echo_chunk_size.trace_add("write", lambda *args: self.update_capacity_check())
         
-        # Reset to defaults button
+        # Reset button
         ttk.Button(self.advanced_content, text="Reset to Defaults", command=self.reset_echo_defaults).grid(row=4, column=0, columnspan=2, sticky="w", pady=(10, 0))
 
         # 3. Controls
@@ -309,17 +303,12 @@ class AudioStegoApp:
             self.btn_toggle_advanced.config(text="▼ Echo Hiding: Hide Advanced Settings")
             self.advanced_visible = True
     
-    def update_alpha_label(self, val):
-        """Update the alpha value display label."""
-        self.lbl_alpha_val.config(text=f"{float(val):.2f}")
-    
     def reset_echo_defaults(self):
-        """Reset echo hiding parameters to default values."""
-        self.echo_chunk_size.set(512)
-        self.echo_delay_0.set(16)
-        self.echo_delay_1.set(32)
-        self.echo_alpha.set(0.3)
-        self.lbl_alpha_val.config(text="0.30")
+        """Reset echo hiding parameters."""
+        self.echo_chunk_size.set(2048)
+        self.echo_delay_0.set(50)
+        self.echo_delay_1.set(200)
+        self.echo_alpha.set(0.5)
         self.update_capacity_check()
 
     def reset_plots(self):
@@ -486,6 +475,8 @@ class AudioStegoApp:
         elif "Echo Hiding" in algo:
             chunk = self.echo_chunk_size.get()
             desc = f"Best for: Robustness. Adds tiny echoes (1 bit per {chunk} samples)."
+        elif "Spread Spectrum" in algo:
+            desc = "Best for: Noise resistance. Uses DSSS (1 bit per 8192 samples)."
         elif "Phase Coding" in algo:
             desc = "Best for: Imperceptibility. Hides in Phase (8 bits per 256 samples)."
         self.algo_desc_lbl.config(text=desc)
@@ -506,6 +497,10 @@ class AudioStegoApp:
             # 1 bit per chunk (configurable chunk size)
             chunk_len = self.echo_chunk_size.get()
             bits = total_samples // chunk_len
+            bytes_avail = (bits // 8) - header_bytes
+        elif "Spread Spectrum" in algo:
+            # 1 bit per 8192 samples (DSSS frame)
+            bits = total_samples // 8192
             bytes_avail = (bits // 8) - header_bytes
         elif "Phase Coding" in algo:
             # encoder stores 8 bits per segment
@@ -605,6 +600,11 @@ class AudioStegoApp:
             p1 = self.echo_chunk_size.get()
             p2 = self.echo_delay_0.get()
             p3 = self.echo_delay_1.get()
+        elif "Spread Spectrum" in algo_name:
+            algo_id = 4
+            p1 = 8192  # Frame size
+            p2 = 0
+            p3 = 0
         elif "Phase" in algo_name:
             algo_id = 3
             p1 = 256 # Segment
@@ -625,6 +625,8 @@ class AudioStegoApp:
         # Encode Body (starts at 1000)
         if algo_id == 2: # Echo
             return self.algo_echo_encode(audio_copy, bits_to_encode, start_offset=start_offset, payload_len=payload_len)
+        elif algo_id == 4: # Spread Spectrum
+            return self.algo_spread_spectrum_encode(audio_copy, bits_to_encode, start_offset=start_offset)
         elif algo_id == 3: # Phase
             return self.algo_phase_encode(audio_copy, bits_to_encode, start_offset=start_offset)
         elif algo_id == 1: # LSB
@@ -648,6 +650,9 @@ class AudioStegoApp:
         if "Echo" in algo_name: 
             algo_id = 2
             p1=self.echo_chunk_size.get(); p2=100; p3=150
+        elif "Spread Spectrum" in algo_name:
+            algo_id = 4
+            p1=8192
         elif "Phase" in algo_name: 
             algo_id = 3
             p1=256; p2=20
@@ -662,6 +667,8 @@ class AudioStegoApp:
         try:
             if algo_id == 2:
                 self.processed_audio = self.algo_echo_encode(audio_copy, bits, start_offset=start_offset, payload_len=125)
+            elif algo_id == 4:
+                self.processed_audio = self.algo_spread_spectrum_encode(audio_copy, bits, start_offset=start_offset)
             elif algo_id == 3:
                 self.processed_audio = self.algo_phase_encode(audio_copy, bits, start_offset=start_offset)
             else:
@@ -712,148 +719,88 @@ class AudioStegoApp:
         return np.clip(smoothed, 0.0, 1.0)
 
     def algo_echo_encode(self, audio, bits, start_offset=1000, payload_len=None):
-        """True Echo Hiding (Mixer Method):
+        """Echo Hiding: Encode data by adding echoes at different delays.
         
-        Generates two continuous echo signals (d0, d1) and blends them
-        using a smoothed mixer signal derived from the bit sequence.
-        
-        Matlab Reference Idea:
-        output = signal + (echo0 * (1-mix)) + (echo1 * mix)
+        Each bit determines which delay is used:
+        - bit 0: echo at delay d0
+        - bit 1: echo at delay d1
         """
-        chunk_size = self.echo_chunk_size.get() # L
-        d0 = self.echo_delay_0.get()            # d0
-        d1 = self.echo_delay_1.get()            # d1
-        alpha = self.echo_alpha.get()           # alpha
+        from scipy.signal import lfilter
         
-        # Matlab default K = L/4
-        smooth_len = chunk_size // 4
+        chunk_size = self.echo_chunk_size.get()
+        d0 = self.echo_delay_0.get()
+        d1 = self.echo_delay_1.get()
+        alpha = self.echo_alpha.get()
         
-        # Total length needed for payload
         num_bits = len(bits)
         total_samples = num_bits * chunk_size
         
-        # Check bounds
         if start_offset + total_samples > len(audio):
-            # Truncate bits if needed
             available = len(audio) - start_offset
             num_bits = available // chunk_size
             bits = bits[:num_bits]
-            total_samples = num_bits * chunk_size
-            if total_samples <= 0: return audio
-            
-        # 1. Generate Mixer Signal
-        mix = self._create_mixer_signal(bits, chunk_size, smooth_len)
-        inv_mix = 1.0 - mix
+            if num_bits <= 0:
+                return audio
         
-        # 2. Extract Source Region
-        # We need the source audio for the entire region + padding for delays
-        # To avoid index errors, we'll process 'in place' efficiently
+        # Echo kernels: impulse response [0, 0, ..., alpha] with delay zeros
+        kernel_d0 = np.zeros(d0 + 1, dtype=np.float32)
+        kernel_d0[-1] = alpha
+        kernel_d1 = np.zeros(d1 + 1, dtype=np.float32)
+        kernel_d1[-1] = alpha
         
-        # We need echo0 and echo1 for the region [start_offset : start_offset + total_samples]
-        # Echo0 comes from source[i - d0]
-        # Echo1 comes from source[i - d1]
-        
-        # Let's create shifted buffers efficiently
-        # This assumes d0, d1 are small compared to available audio before start_offset?
-        # start_offset is 1000. d1 is 150. So we are fine (1000 > 150).
-        
-        region_start = start_offset
-        region_end = start_offset + total_samples
-        
-        source_region = audio[region_start : region_end].astype(np.float32)
-        
-        # Echo 0 Source: [start - d0 : end - d0]
-        e0_start = region_start - d0
-        e0_end = region_end - d0
-        echo0 = audio[e0_start : e0_end].astype(np.float32) * alpha
-        
-        # Echo 1 Source: [start - d1 : end - d1]
-        e1_start = region_start - d1
-        e1_end = region_end - d1
-        echo1 = audio[e1_start : e1_end].astype(np.float32) * alpha
-        
-        # 3. Mix
-        # added_echo = E0*(1-mix) + E1*mix
-        added_echo = (echo0 * inv_mix) + (echo1 * mix)
-        
-        # 4. Add to Original
         output = audio.copy().astype(np.float32)
-        output[region_start : region_end] += added_echo
+        
+        for i, bit in enumerate(bits):
+            chunk_start = start_offset + i * chunk_size
+            chunk_end = chunk_start + chunk_size
+            
+            if chunk_end > len(audio):
+                break
+            
+            chunk = audio[chunk_start:chunk_end].astype(np.float32)
+            kernel = kernel_d0 if bit == 0 else kernel_d1
+            echo = lfilter(kernel, 1.0, chunk)
+            output[chunk_start:chunk_end] += echo
         
         return np.clip(output, -32768, 32767).astype(np.int16)
 
     def algo_phase_encode(self, audio, bits, start_offset=1000):
-        """True Phase Coding: Encode bits in the phase of frequency bins.
+        """Phase Coding: Encode bits in frequency bin phases.
         
-        Uses direct block processing (no overlap) to preserve absolute phase.
-        Bit 0 -> -pi/2 (-90 deg)
-        Bit 1 -> +pi/2 (+90 deg)
-        (Max gap of 180 deg for high robustness)
+        Uses BPSK modulation: bit 0 -> -90°, bit 1 -> +90°
         """
         segment_size = 256
-        start_frequency_bin = 20
+        start_bin = 20  # Skip low frequencies
         bits_per_segment = 8
-        min_mag = 500 # Robustness threshold against quantization
-        
-        num_bits = len(bits)
-        audio_length = len(audio)
+        min_magnitude = 500  # Boost weak bins for reliable decoding
         
         output = audio.copy().astype(np.float64)
+        bit_idx = 0
+        pos = start_offset
         
-        bit_index = 0
-        current_sample = start_offset
-        
-        while bit_index < num_bits:
-            chunk_start = current_sample
-            chunk_end = chunk_start + segment_size
-            
-            if chunk_end > audio_length:
-                break
-                
-            segment = output[chunk_start:chunk_end]
-            
-            # Transform to frequency domain
+        while bit_idx < len(bits) and pos + segment_size <= len(audio):
+            segment = output[pos:pos + segment_size]
             spectrum = np.fft.rfft(segment)
             magnitude = np.abs(spectrum)
             phase = np.angle(spectrum)
             
-            # Encode up to 8 bits in this segment
-            for bin_offset in range(bits_per_segment):
-                if bit_index >= num_bits:
+            for i in range(bits_per_segment):
+                if bit_idx >= len(bits):
                     break
-                    
-                frequency_bin = start_frequency_bin + bin_offset
-                if frequency_bin >= len(magnitude):
+                freq_bin = start_bin + i
+                if freq_bin >= len(magnitude):
                     break
-                    
-                # Modify Phase (BPSK)
-                # Boost magnitude if too low to ensure phase survives quantization
-                if magnitude[frequency_bin] < min_mag:
-                    magnitude[frequency_bin] = min_mag
-                    
-                # Set phase: 0 -> -pi/2, 1 -> +pi/2
-                if bits[bit_index] == 0:
-                    phase[frequency_bin] = -np.pi / 2
-                else:
-                    phase[frequency_bin] = np.pi / 2
-                    
-                bit_index += 1
                 
-            # Reconstruct Spectrum
-            # valid rfft is conjugate symmetric, but we only have positive bins here?
-            # numpy.fft.rfft returns only the positive half. irfft handles the rest.
-            # We just need to reconstruct complex spectrum from mag/phase.
+                if magnitude[freq_bin] < min_magnitude:
+                    magnitude[freq_bin] = min_magnitude
+                
+                phase[freq_bin] = -np.pi/2 if bits[bit_idx] == 0 else np.pi/2
+                bit_idx += 1
+            
             new_spectrum = magnitude * np.exp(1j * phase)
-            
-            # Inverse Transform
-            new_segment = np.fft.irfft(new_spectrum, n=segment_size)
-            
-            # Overwrite output
-            output[chunk_start:chunk_end] = new_segment
-            
-            # Move to next block
-            current_sample += segment_size
-            
+            output[pos:pos + segment_size] = np.fft.irfft(new_spectrum, n=segment_size)
+            pos += segment_size
+        
         return np.clip(output, -32768, 32767).astype(np.int16)
 
     # --- Decoding Logic ---
@@ -899,6 +846,11 @@ class AudioStegoApp:
                 self.log(f"Algorithm: Phase Coding (Segment={segment}, StartBin={start_bin})")
                 decoded_bits = self.algo_phase_decode(audio, start_offset=start_offset, segment_size=segment, start_bin=start_bin)
             
+            elif algo_id == 4: # Spread Spectrum
+                frame_size = header['p1']
+                self.log(f"Algorithm: Spread Spectrum (FrameSize={frame_size})")
+                decoded_bits = self.algo_spread_spectrum_decode(audio, start_offset=start_offset, frame_size=frame_size)
+            
             elif algo_id == 1: # LSB
                 self.log("Algorithm: LSB")
                 decoded_bits = self.algo_lsb_decode(audio, start_index=start_offset)
@@ -926,15 +878,23 @@ class AudioStegoApp:
             payload_bits = decoded_bits[:total_bits_needed]
             payload_bytes = np.packbits(payload_bits).tobytes()
             
-            # Save File
-            ext = ".bin" # Default
+            # Detect file type from magic bytes (default to .txt for text files)
+            ext = ".txt"
+            type_name = "Text File"
             for magic, (extension, name) in self.MAGIC_BYTES.items():
                 if payload_bytes.startswith(magic):
                     ext = extension
+                    type_name = name
                     self.log(f"Detected File Type: {name} ({extension})")
                     break
-                    
-            save_path = filedialog.asksaveasfilename(defaultextension=ext, initialfile=f"decoded{ext}")
+            
+            # Show save dialog with detected file type
+            filetypes = [(type_name, f"*{ext}"), ("All Files", "*.*")]
+            save_path = filedialog.asksaveasfilename(
+                defaultextension=ext,
+                filetypes=filetypes,
+                initialfile=f"decoded{ext}"
+            )
             if save_path:
                 with open(save_path, 'wb') as f:
                     f.write(payload_bytes)
@@ -993,57 +953,83 @@ class AudioStegoApp:
             spectrum = np.fft.fft(chunk)
             # 2. Log Magnitude (add epsilon to avoid log(0))
             log_mag = np.log(np.abs(spectrum) + 1e-8)
-            # 3. IFFT -> Real part
             cepstrum = np.abs(np.fft.ifft(log_mag)).real
             
-            # Precision Check: Matlab uses double precision.
             val0 = cepstrum[d0]
             val1 = cepstrum[d1]
-            
-            # DEBUG: Print first few decisions
-            if len(decoded_bits) < 10:
-                print(f"Debug Chunk {len(decoded_bits)}: d0({d0})={val0:.4f}, d1({d1})={val1:.4f} -> {'0' if val0>=val1 else '1'}")
-
-            if val0 >= val1:
-                decoded_bits.append(0)
-            else:
-                decoded_bits.append(1)
-            
+            decoded_bits.append(0 if val0 >= val1 else 1)
             current_sample += chunk_size
             
         return np.array(decoded_bits, dtype=np.uint8)
 
     def algo_phase_decode(self, audio, start_offset=1000, segment_size=256, start_bin=20):
-        """True Phase Coding Decode: Extract bits from phase angle.
-        
-        Bit 0: Phase < 0 
-        Bit 1: Phase > 0 
-        """
+        """Phase Coding Decode: Extract bits from phase angles."""
         bits_per_segment = 8
-        audio_length = len(audio)
         decoded_bits = []
+        pos = start_offset
         
-        current_sample = start_offset
-        
-        while current_sample + segment_size <= audio_length:
-            chunk = audio[current_sample:current_sample+segment_size]
-            
-            # FFT
-            spectrum = np.fft.rfft(chunk)
+        while pos + segment_size <= len(audio):
+            spectrum = np.fft.rfft(audio[pos:pos + segment_size])
             phase = np.angle(spectrum)
             
-            for bin_offset in range(bits_per_segment):
-                frequency_bin = start_bin + bin_offset
-                if frequency_bin >= len(phase):
+            for i in range(bits_per_segment):
+                freq_bin = start_bin + i
+                if freq_bin >= len(phase):
                     break
-                    
-                angle = phase[frequency_bin]
-                # Simple decision boundary at 0
-                decoded_bits.append(1 if angle > 0 else 0)
+                decoded_bits.append(1 if phase[freq_bin] > 0 else 0)
             
-            # Block stepping (no OLA for robustness)
-            current_sample += segment_size
+            pos += segment_size
+        
+        return np.array(decoded_bits, dtype=np.uint8)
+
+    def algo_spread_spectrum_encode(self, audio, bits, start_offset=1000, frame_size=8192):
+        """DSSS Spread Spectrum: Encode using pseudo-random spreading.
+        
+        bit 0: subtract spread sequence from frame
+        bit 1: add spread sequence to frame
+        """
+        alpha = 500.0  # Embedding strength (higher = more reliable)
+        
+        if start_offset + len(bits) * frame_size > len(audio):
+            available = len(audio) - start_offset
+            bits = bits[:available // frame_size]
+            if len(bits) <= 0:
+                return audio
+        
+        # Deterministic PN sequence (same seed for encode/decode)
+        rng = np.random.default_rng(seed=12345)
+        spread_seq = (rng.integers(0, 2, frame_size) * 2 - 1).astype(np.float32)
+        
+        output = audio.copy().astype(np.float32)
+        
+        for i, bit in enumerate(bits):
+            start = start_offset + i * frame_size
+            end = start + frame_size
+            if end > len(audio):
+                break
             
+            if bit == 1:
+                output[start:end] += alpha * spread_seq
+            else:
+                output[start:end] -= alpha * spread_seq
+        
+        return np.clip(output, -32768, 32767).astype(np.int16)
+
+    def algo_spread_spectrum_decode(self, audio, start_offset=1000, frame_size=8192):
+        """DSSS Spread Spectrum Decode: Correlate with spread sequence."""
+        decoded_bits = []
+        
+        # Same PN sequence as encoder
+        rng = np.random.default_rng(seed=12345)
+        spread_seq = (rng.integers(0, 2, frame_size) * 2 - 1).astype(np.float32)
+        
+        pos = start_offset
+        while pos + frame_size <= len(audio):
+            frame = audio[pos:pos + frame_size].astype(np.float32)
+            correlation = np.sum(frame * spread_seq) / frame_size
+            decoded_bits.append(1 if correlation >= 0 else 0)
+            pos += frame_size
+        
         return np.array(decoded_bits, dtype=np.uint8)
 
     # --- Playback/Save ---
