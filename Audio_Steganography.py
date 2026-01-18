@@ -71,6 +71,7 @@ class AudioStegoApp:
         self.play_thread = None
         self.decode_thread = None
         self.exiting = False
+        self.comparison_file_path = None  # Optional file for BER comparison
         
         # Echo Hiding Parameters
         self.echo_chunk_size = tk.IntVar(value=2048)
@@ -398,15 +399,27 @@ class AudioStegoApp:
         ttk.Label(dec_frame, text="Auto-Detected from Smart Header", font=("Segoe UI", 9, "italic"), foreground="#555").grid(row=1, column=1, sticky="w", padx=10)
         # self.decode_algo_var was used but logic now ignores it
 
+        # Optional: Comparison file for BER calculation
+        compare_frame = ttk.LabelFrame(self.tab_decode, text=" 2. BER Comparison (Optional) ", padding=10)
+        compare_frame.grid(row=1, column=0, sticky="ew", padx=10, pady=5)
+        compare_frame.columnconfigure(1, weight=1)
+        
+        ttk.Button(compare_frame, text="Select Original File", command=self.load_comparison_file).grid(row=0, column=0, sticky="w")
+        self.lbl_compare_file = ttk.Label(compare_frame, text="No file selected (decode will work without this)", foreground="#666")
+        self.lbl_compare_file.grid(row=0, column=1, sticky="w", padx=10)
+        ttk.Button(compare_frame, text="Clear", command=self.clear_comparison_file).grid(row=0, column=2, sticky="e")
+        
+        self.lbl_ber_result = ttk.Label(compare_frame, text="", font=("Segoe UI", 10, "bold"))
+        self.lbl_ber_result.grid(row=1, column=0, columnspan=3, sticky="w", pady=(5, 0))
 
         # Action
-        self.btn_extract = ttk.Button(dec_frame, text="Extract Hidden File", command=self.extract_file, state="disabled")
-        self.btn_extract.grid(row=2, column=0, columnspan=3, sticky="ew", pady=(15, 0))
+        self.btn_extract = ttk.Button(self.tab_decode, text="Extract Hidden File", command=self.extract_file, state="disabled")
+        self.btn_extract.grid(row=2, column=0, sticky="ew", padx=10, pady=(10, 0))
 
         # Log
         log_frame = ttk.LabelFrame(self.tab_decode, text=" Activity Log ", padding=10)
-        log_frame.grid(row=2, column=0, sticky="nsew", padx=10, pady=10)
-        self.tab_decode.rowconfigure(2, weight=1)
+        log_frame.grid(row=3, column=0, sticky="nsew", padx=10, pady=10)
+        self.tab_decode.rowconfigure(3, weight=1)
 
         self.log_txt = tk.Text(log_frame, height=10, state="disabled", bg="#fff", font=("Consolas", 9))
         self.log_txt.pack(fill="both", expand=True)
@@ -464,6 +477,35 @@ class AudioStegoApp:
                 self.log(f"Loaded {os.path.basename(path)} for decoding.")
             except Exception as e:
                 self.log(f"Error loading: {e}")
+
+    def load_comparison_file(self):
+        """Load optional comparison file for BER calculation."""
+        path = filedialog.askopenfilename(filetypes=[("All files", "*.*")])
+        if path:
+            self.comparison_file_path = path
+            size_kb = os.path.getsize(path) / 1024
+            self.lbl_compare_file.config(text=f"{os.path.basename(path)} ({size_kb:.2f} KB)", foreground="#28a745")
+            self.lbl_ber_result.config(text="")
+
+    def clear_comparison_file(self):
+        """Clear comparison file selection."""
+        self.comparison_file_path = None
+        self.lbl_compare_file.config(text="No file selected (decode will work without this)", foreground="#666")
+        self.lbl_ber_result.config(text="")
+
+    def calculate_ber(self, original_bytes, decoded_bytes):
+        """Calculate Bit Error Rate between two byte sequences."""
+        orig_bits = np.unpackbits(np.frombuffer(original_bytes, dtype=np.uint8))
+        dec_bits = np.unpackbits(np.frombuffer(decoded_bytes, dtype=np.uint8))
+        
+        min_len = min(len(orig_bits), len(dec_bits))
+        if min_len == 0:
+            return 0, 0, 0
+        
+        errors = np.sum(orig_bits[:min_len] != dec_bits[:min_len])
+        ber = errors / min_len * 100
+        return ber, errors, min_len
+
 
     # --- Core Logic ---
 
@@ -899,6 +941,25 @@ class AudioStegoApp:
                 with open(save_path, 'wb') as f:
                     f.write(payload_bytes)
                 self.log(f"Success! Saved to {save_path}")
+                
+                # Calculate BER if comparison file was provided
+                if self.comparison_file_path:
+                    try:
+                        with open(self.comparison_file_path, 'rb') as f:
+                            original_bytes = f.read()
+                        ber, errors, total_bits = self.calculate_ber(original_bytes, payload_bytes)
+                        
+                        if ber == 0:
+                            result_text = f"✓ Perfect Match! BER = 0% (0/{total_bits} bits)"
+                            result_color = "#28a745"
+                        else:
+                            result_text = f"BER = {ber:.2f}% ({errors}/{total_bits} bit errors)"
+                            result_color = "#dc3545" if ber > 5 else "#ffc107"
+                        
+                        self.lbl_ber_result.config(text=result_text, foreground=result_color)
+                        self.log(f"BER Comparison: {result_text}")
+                    except Exception as e:
+                        self.log(f"Error calculating BER: {e}")
                 
         except Exception as e:
             self.log(f"Error extracting: {e}")
