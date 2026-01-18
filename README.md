@@ -48,7 +48,6 @@ python Audio_Steganography.py
 
 - `Audio_Steganography.py` - Main application
 - `DOCUMENTATION.md` - Technical details
-- `test_steganography.py` - Automated tests
 
 ## License
 
