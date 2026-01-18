@@ -54,6 +54,7 @@ class AudioStegoApp:
         style.configure("SubHeader.TLabel", font=("Segoe UI", 10))
         style.configure("Bold.TLabel", font=("Segoe UI", 10, "bold"))
         
+        # Increase arrow size for high-DPI screens dynamically
         # Standard DPI is 96. If we detect high DPI (>1.2x), use larger arrows.
         try:
             dpi_scale = self.root.winfo_fpixels('1i') / 96.0
