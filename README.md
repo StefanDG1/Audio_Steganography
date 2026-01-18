@@ -42,7 +42,7 @@ python Audio_Steganography.py
 | LSB | High | Low | Excellent |
 | Echo | Low | Medium | Good |
 | Phase | Medium | High | Good |
-| DSSS | Very Low | Very High | Excellent |
+| DSSS | Very Low | Very High | Good |
 
 ## Files
 

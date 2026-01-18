@@ -147,3 +147,86 @@ When decoding, magic bytes detect file type:
 | `%PDF` | .pdf |
 | `PK\x03\x04` | .zip |
 | (none matched) | .txt (default) |
+
+---
+
+## Hard-Coded Values & Assumptions
+
+This section documents important hard-coded values and design decisions in the codebase.
+
+### Header Protocol Constants
+
+| Constant | Value | Reason |
+|----------|-------|--------|
+| `HEADER_OFFSET` | 1000 samples | Payload starts at sample 1000. Header uses samples 0-119 (15 bytes × 8 bits), leaving safety margin. |
+| `Header Size` | 15 bytes | Fixed structure: Magic(2) + Algo(1) + Params(6) + Length(4) + CRC(2) |
+| `Magic Bytes` | `'st'` (0x7374) | Identifies file as steganography-encoded |
+
+### Algorithm-Specific Constants
+
+#### LSB (Least Significant Bit)
+| Parameter | Value | Reason |
+|-----------|-------|--------|
+| Bits per sample | 1 | Each 16-bit sample can hide 1 bit in position 0 |
+| Capacity | ~5.5 KB/sec at 44.1kHz | 44100 bits/sec ÷ 8 = 5512 bytes/sec |
+
+#### Echo Hiding (User-Configurable)
+| Parameter | Default | Range | Reason |
+|-----------|---------|-------|--------|
+| `chunk_size` | 2048 | 256-8192 | Samples per bit. Smaller = more capacity, less reliable |
+| `delay_0` | 50 | 10-500 | Echo delay for bit 0 (samples) |
+| `delay_1` | 200 | 50-1000 | Echo delay for bit 1 (samples). Must differ from delay_0 |
+| `alpha` | 0.5 | 0.1-1.0 | Echo strength. Higher = more reliable but audible |
+
+#### Phase Coding (Hard-Coded)
+| Parameter | Value | Reason |
+|-----------|-------|--------|
+| `segment_size` | 256 | FFT window size (power of 2 for efficiency) |
+| `start_bin` | 20 | Skip bins 0-19 (low frequencies contain most energy) |
+| `bits_per_segment` | 8 | Uses frequency bins 20-27 = 8 bits per segment |
+| `min_magnitude` | 500 | Boost weak bins to ensure reliable phase decoding |
+
+#### DSSS (Spread Spectrum) (Hard-Coded)
+| Parameter | Value | Reason |
+|-----------|-------|--------|
+| `frame_size` | 8192 | Samples per bit. Large = very robust but low capacity |
+| `seed` | 12345 | Deterministic PN sequence (encoder & decoder must match) |
+| `alpha` | 500.0 | Embedding strength for PN sequence |
+
+### Audio Processing Assumptions
+
+- **Sample Format**: 16-bit signed integer (int16, range -32768 to 32767)
+- **Channels**: Mono only (stereo is converted to mono using first channel)
+- **Sample Rate**: Any (typically 44100 Hz), stored in WAV header
+- **Bit Order**: MSB-first when packing/unpacking bytes (numpy default)
+- **Byte Order**: Little-endian for header struct packing
+
+### CRC Checksum
+
+- Simple sum-based checksum: `sum(header_bytes) & 0xFFFF`
+- 16-bit result (0-65535)
+- Validates header integrity, not cryptographic security
+
+---
+
+## Credits & References
+
+### MATLAB Source Inspiration
+
+Algorithm implementations are inspired by the MATLAB library:
+
+**[audio-steganography-algorithms](https://github.com/ktekeli/audio-steganography-algorithms)**
+by Kadir Tekeli (MIT License 2016-2017)
+
+
+### Python Libraries Used
+
+| Library | Purpose |
+|---------|---------|
+| `numpy` | Array operations, bit manipulation, FFT |
+| `scipy.io.wavfile` | WAV file reading/writing |
+| `scipy.signal.lfilter` | FIR filtering for echo generation |
+| `sounddevice` | Audio playback |
+| `matplotlib` | Waveform visualization |
+| `tkinter` | GUI framework |
+| `struct` | Binary header packing/unpacking |

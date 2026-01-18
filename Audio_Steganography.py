@@ -507,9 +507,29 @@ class AudioStegoApp:
         return ber, errors, min_len
 
 
-    # --- Core Logic ---
+    # =============================================================================
+    # CORE LOGIC SECTION
+    # =============================================================================
+    # This section contains the main steganography logic including:
+    # - Capacity calculations for each algorithm
+    # - Smart Header creation and parsing (15-byte protocol)
+    # - Encoding and decoding algorithms (LSB, Echo Hiding, Phase Coding, DSSS)
+    #
+    # Algorithm implementations are inspired by the MATLAB library:
+    # https://github.com/ktekeli/audio-steganography-algorithms
+    # by Kadir Tekeli (MIT License 2016-2017)
+    # =============================================================================
 
     def update_algo_description(self, event=None):
+        """
+        Update the algorithm description label in the UI based on selected algorithm.
+        
+        Each algorithm has different trade-offs:
+        - LSB: Maximum capacity (1 bit/sample), but fragile to any modification
+        - Echo Hiding: More robust (survives some compression), lower capacity
+        - Spread Spectrum (DSSS): Very robust to noise, very low capacity 
+        - Phase Coding: Good imperceptibility, moderate capacity
+        """
         algo = self.algo_var.get()
         desc = ""
         if "LSB" in algo:
@@ -524,169 +544,339 @@ class AudioStegoApp:
         self.algo_desc_lbl.config(text=desc)
 
     def get_max_kb(self):
+        """
+        Calculate the maximum payload capacity in kilobytes for the selected algorithm.
+        
+        Capacity varies dramatically between algorithms:
+        - LSB: 1 bit per audio sample (highest capacity)
+        - Echo Hiding: 1 bit per chunk (chunk_size samples per bit)
+        - DSSS: 1 bit per 8192 samples (very low capacity, but robust)
+        - Phase Coding: 8 bits per 256-sample segment
+        
+        Returns:
+            float: Maximum payload size in kilobytes (KB)
+        """
         if self.audio_data is None: return 0
         total_samples = self.audio_data.size
         algo = self.algo_var.get()
         
-        # header bytes reserved (4 bytes) and small safety margin
+        # Reserve 4 bytes for header overhead plus safety margin
         header_bytes = 4
         bytes_avail = 0
 
         if "LSB" in algo:
-            # 1 bit per sample -> bytes = samples // 8
+            # LSB: Each audio sample can hold 1 bit of data
+            # Total bits = total_samples, so bytes = total_samples / 8
             bytes_avail = (total_samples // 8) - header_bytes
+            
         elif "Echo Hiding" in algo:
-            # 1 bit per chunk (configurable chunk size)
+            # Echo Hiding: Each chunk encodes 1 bit
+            # Configurable chunk_size (default 2048) determines capacity
             chunk_len = self.echo_chunk_size.get()
             bits = total_samples // chunk_len
             bytes_avail = (bits // 8) - header_bytes
+            
         elif "Spread Spectrum" in algo:
-            # 1 bit per 8192 samples (DSSS frame)
+            # DSSS: Each 8192-sample frame encodes 1 bit
+            # Very low capacity but extremely robust to noise
             bits = total_samples // 8192
             bytes_avail = (bits // 8) - header_bytes
+            
         elif "Phase Coding" in algo:
-            # encoder stores 8 bits per segment
+            # Phase Coding: Each 256-sample segment encodes 8 bits (1 byte)
+            # Uses frequency bins 20-27 to store data in phase angles
             segment_len = 256
             bytes_avail = (total_samples // segment_len) - header_bytes
 
-        # Return KB available
+        # Return capacity in kilobytes, never negative
         return max(0, bytes_avail / 1024)
 
-    # --- Smart Header Logic (Standard) ---
+    # =============================================================================
+    # SMART HEADER PROTOCOL
+    # =============================================================================
+    # The Smart Header is a 15-byte metadata block stored at the beginning of the
+    # stego audio using LSB encoding. It allows the decoder to automatically detect:
+    # - Which algorithm was used (algo_id)
+    # - Algorithm-specific parameters (chunk size, delays, etc.)
+    # - Payload length (how many bytes of hidden data)
+    # - CRC checksum for validation
+    #
+    # Header is written starting at sample 0, payload data starts at HEADER_OFFSET.
+    # =============================================================================
     
     def create_smart_header(self, algo_id, param1, param2, param3, payload_len):
-        """Create a robust configuration header.
-        Structure (15 bytes): 
-        [Magic(2)] [Algo(1)] [P1(2)] [P2(2)] [P3(2)] [Len(4)] [CRC(2)]
         """
+        Create a 15-byte Smart Header for the stego file.
+        
+        The header is structured as follows (little-endian byte order):
+        ┌─────────┬──────────┬─────────┬─────────┬─────────┬─────────────┬─────────┐
+        │ Bytes   │ 0-1      │ 2       │ 3-4     │ 5-6     │ 7-8         │ 9-12    │ 13-14   │
+        ├─────────┼──────────┼─────────┼─────────┼─────────┼─────────────┼─────────┤
+        │ Field   │ Magic    │ Algo ID │ Param1  │ Param2  │ Param3      │ Length  │ CRC     │
+        │ Type    │ 2s char  │ B uint8 │ H uint16│ H uint16│ H uint16    │ I uint32│ H uint16│
+        └─────────┴──────────┴─────────┴─────────┴─────────┴─────────────┴─────────┘
+        
+        struct.pack format string: '<2sBHHHI'
+        - '<' = Little-endian byte order (LSB first)
+        - '2s' = 2-byte string (the magic bytes 'st')
+        - 'B' = Unsigned char/byte (0-255) for algorithm ID
+        - 'H' = Unsigned short (0-65535) for parameters
+        - 'I' = Unsigned int (0-4294967295) for payload length
+        
+        Args:
+            algo_id: Algorithm identifier (1=LSB, 2=Echo, 3=Phase, 4=DSSS)
+            param1, param2, param3: Algorithm-specific parameters
+                - Echo: chunk_size, delay_0, delay_1
+                - Phase: segment_size, start_bin, unused
+                - DSSS: frame_size, unused, unused
+            payload_len: Size of hidden data in bytes
+            
+        Returns:
+            bytes: 15-byte header ready for LSB encoding
+        """
+        # Magic bytes 'st' identify this as a steganography file
         magic = b'st'
+        
+        # Pack the header data (13 bytes without CRC)
+        # Format: little-endian, 2-char string, 1 byte, 3 unsigned shorts, 1 unsigned int
         data = struct.pack('<2sBHHHI', magic, algo_id, param1, param2, param3, payload_len)
+        
+        # Calculate simple checksum: sum of all bytes, masked to 16 bits
+        # This allows detection of header corruption during decoding
         checksum = sum(data) & 0xFFFF
+        
+        # Append CRC as final 2 bytes (unsigned short)
         full_header = data + struct.pack('<H', checksum)
-        return full_header
+        return full_header  # Total: 13 + 2 = 15 bytes
 
+    # Fixed offset where payload data starts (samples 0-999 reserved for header)
+    # Header only needs 120 bits (15 bytes * 8), but we use 1000 for safety margin
     HEADER_OFFSET = 1000
 
     def calculate_header_offset(self):
+        """Return the fixed header offset constant (1000 samples)."""
         return self.HEADER_OFFSET
 
     def read_smart_header(self, audio):
-        """Read standard 15-byte Smart Header."""
+        """
+        Read and validate the 15-byte Smart Header from the beginning of stego audio.
+        
+        The header is encoded in the LSB of the first 120 audio samples (15 bytes * 8 bits).
+        This function extracts those bits, reconstructs the header, and validates it.
+        
+        Decoding Process:
+        1. Extract LSB (bit 0) from first 120 samples → 120 bits = 15 bytes
+        2. Pack bits back into bytes using np.packbits()
+        3. Unpack the header structure using struct.unpack()
+        4. Validate magic bytes ('st') and CRC checksum
+        
+        Returns:
+            dict: {'algo_id', 'p1', 'p2', 'p3', 'payload_len'} if valid, None otherwise
+        """
         try:
-            header_len = 15
-            bits_needed = header_len * 8
+            header_len = 15  # 15 bytes total
+            bits_needed = header_len * 8  # 120 bits
             
+            # Audio must have at least 120 samples for the header
             if len(audio) < bits_needed: return None
             
+            # Extract LSB from each of the first 120 samples
+            # audio[:bits_needed] & 1 performs bitwise AND with 1, isolating bit 0
+            # This gives an array of 120 values, each being 0 or 1
             header_bits = audio[:bits_needed] & 1
+            
+            # Convert 120 individual bits back into 15 bytes
+            # np.packbits() groups every 8 bits into a single byte (MSB first)
+            # .tobytes() converts the numpy array to a Python bytes object
             header_bytes = np.packbits(header_bits).tobytes()
             
+            # Unpack the 15-byte structure using the same format as create_smart_header
+            # Format: '<2sBHHHIH' adds the 2-byte CRC at the end
+            # - '<' = little-endian
+            # - '2s' = 2-byte string (magic)
+            # - 'B' = 1-byte unsigned (algo_id)
+            # - 'HHH' = 3 unsigned shorts (params)
+            # - 'I' = unsigned int (payload length)
+            # - 'H' = unsigned short (CRC)
             magic, algo_id, p1, p2, p3, length, crc = struct.unpack('<2sBHHHIH', header_bytes)
             
+            # Validate magic bytes - must be 'st' to confirm this is a stego file
             if magic != b'st': return None
             
-            data_part = header_bytes[:-2]
-            calc_crc = sum(data_part) & 0xFFFF
-            if calc_crc != crc: return None
+            # Validate CRC checksum
+            # CRC is calculated over the first 13 bytes (everything except the CRC itself)
+            data_part = header_bytes[:-2]  # First 13 bytes
+            calc_crc = sum(data_part) & 0xFFFF  # Sum of bytes, masked to 16 bits
+            if calc_crc != crc: return None  # CRC mismatch = corrupted header
             
+            # Return parsed header as a dictionary for easy access
             return {'algo_id': algo_id, 'p1': p1, 'p2': p2, 'p3': p3, 'payload_len': length}
             
         except Exception:
+            # Any parsing error means invalid/corrupted header
             return None
 
     def update_capacity_check(self, event=None):
+        """
+        Update the UI status label to show if the payload fits in the carrier audio.
+        
+        Compares the payload file size against the maximum capacity calculated by
+        get_max_kb(). Enables or disables the encode button based on capacity.
+        """
         if not self.carrier_path: return
 
         limit_kb = self.get_max_kb()
         self.update_algo_description()
         
         if not self.payload_path:
+            # No payload selected yet, just show maximum available capacity
             self.status_lbl.config(text=f"Max Capacity: {limit_kb:.2f} KB", foreground="#333")
             return
 
+        # Calculate payload size in KB
         payload_kb = os.path.getsize(self.payload_path) / 1024
+        # Reserve 32 bytes of overhead for header + safety margin
         header_kb = 32 / 1024 
         
         if payload_kb + header_kb > limit_kb: 
+            # Payload too large - disable encoding buttons
             self.status_lbl.config(text=f"Error: File too large! ({payload_kb:.2f} KB > {limit_kb:.2f} KB)", foreground="#d9534f")
             self.btn_bake.state(['disabled'])
             self.btn_play_stego.state(['disabled'])
         else:
+            # Payload fits - enable encoding buttons
             self.status_lbl.config(text=f"Ready: File fits ({payload_kb:.2f} KB / {limit_kb:.2f} KB)", foreground="#28a745")
             self.btn_bake.state(['!disabled'])
             self.btn_play_stego.state(['!disabled'])
 
     def process_steganography(self):
-        """Encode payload using Standard Protocol (Fixed Offset)."""
+        """
+        Main encoding function: embed payload into audio using selected algorithm.
+        
+        Encoding Workflow:
+        1. Load the payload file as raw bytes
+        2. Convert bytes to a bit array using np.unpackbits()
+        3. Create the 15-byte Smart Header with algorithm parameters
+        4. Embed header at samples 0-119 using LSB encoding
+        5. Embed payload starting at sample 1000 using the selected algorithm
+        
+        The header is ALWAYS LSB-encoded regardless of the payload algorithm.
+        This allows the decoder to read the header first and determine which
+        algorithm to use for the payload.
+        
+        Returns:
+            np.ndarray: Modified audio with embedded data, or None on error
+        """
         if self.audio_data is None or self.payload_path is None: return None
 
-        # 1. Load Payload
+        # =================================================================
+        # STEP 1: Load Payload as Raw Bytes
+        # =================================================================
         with open(self.payload_path, 'rb') as f:
             data = f.read()
         payload_len = len(data)
 
-        # 2. Prepare Bits
+        # =================================================================
+        # STEP 2: Convert Payload Bytes to Bit Array
+        # =================================================================
+        # np.frombuffer() interprets the bytes as unsigned 8-bit integers (0-255)
         byte_array = np.frombuffer(data, dtype=np.uint8)
+        # np.unpackbits() expands each byte into 8 individual bits (MSB first)
+        # Example: byte 0x4D (77) becomes [0,1,0,0,1,1,0,1]
         bits_to_encode = np.unpackbits(byte_array)
         
+        # Create a copy of audio to modify (preserve original for comparison)
         audio_copy = self.audio_data.copy()
         algo_name = self.algo_var.get()
-        start_offset = self.HEADER_OFFSET
+        start_offset = self.HEADER_OFFSET  # 1000 samples
         
-        # Determine Algo & Params
+        # =================================================================
+        # STEP 3: Determine Algorithm ID and Parameters
+        # =================================================================
+        # Algorithm IDs: 1=LSB, 2=Echo, 3=Phase, 4=DSSS
         algo_id = 1
-        p1, p2, p3 = 0, 0, 0
+        p1, p2, p3 = 0, 0, 0  # Default parameters
         
         if "Echo" in algo_name:
             algo_id = 2
-            p1 = self.echo_chunk_size.get()
-            p2 = self.echo_delay_0.get()
-            p3 = self.echo_delay_1.get()
+            p1 = self.echo_chunk_size.get()  # Samples per bit (default: 2048)
+            p2 = self.echo_delay_0.get()     # Echo delay for bit 0 (default: 50)
+            p3 = self.echo_delay_1.get()     # Echo delay for bit 1 (default: 200)
         elif "Spread Spectrum" in algo_name:
             algo_id = 4
-            p1 = 8192  # Frame size
+            p1 = 8192  # Frame size (fixed, 8192 samples per bit)
             p2 = 0
             p3 = 0
         elif "Phase" in algo_name:
             algo_id = 3
-            p1 = 256 # Segment
-            p2 = 20  # Start Bin
+            p1 = 256  # Segment size (256 samples)
+            p2 = 20   # Starting frequency bin
             p3 = 0
             
-        # Create Header
+        # =================================================================
+        # STEP 4: Create and Embed Header (Always LSB)
+        # =================================================================
         header = self.create_smart_header(algo_id, p1, p2, p3, payload_len)
+        # Convert header bytes to bits for LSB embedding
         header_bits = np.unpackbits(np.frombuffer(header, dtype=np.uint8))
         
-        # Write Header (starts at 0)
+        # Check audio is long enough for header + payload offset
         if len(audio_copy) < len(header_bits) + start_offset:
             self.update_status("Error: Audio too short.")
             return None
-            
+        
+        # Embed header using LSB encoding at the start of audio (samples 0-119)
+        # This line performs bitwise manipulation to replace the LSB of each sample:
+        #
+        # audio_copy[:len(header_bits)]         - Select first 120 audio samples
+        # & ~1                                   - Clear bit 0 (AND with 11111110)
+        #                                        ~1 is bitwise NOT of 1 = ...11111110
+        # | header_bits                         - Set bit 0 to header bit value (OR)
+        #
+        # Example: sample = 1234 (binary: 10011010010)
+        #          header_bit = 1
+        #          (1234 & ~1) | 1 = (1234 & -2) | 1 = 1234 | 1 = 1235
         audio_copy[:len(header_bits)] = (audio_copy[:len(header_bits)] & ~1) | header_bits
         
-        # Encode Body (starts at 1000)
-        if algo_id == 2: # Echo
+        # =================================================================
+        # STEP 5: Encode Payload Using Selected Algorithm
+        # =================================================================
+        # Payload data starts at HEADER_OFFSET (sample 1000) to avoid header
+        if algo_id == 2:  # Echo Hiding
             return self.algo_echo_encode(audio_copy, bits_to_encode, start_offset=start_offset, payload_len=payload_len)
-        elif algo_id == 4: # Spread Spectrum
+        elif algo_id == 4:  # Spread Spectrum (DSSS)
             return self.algo_spread_spectrum_encode(audio_copy, bits_to_encode, start_offset=start_offset)
-        elif algo_id == 3: # Phase
+        elif algo_id == 3:  # Phase Coding
             return self.algo_phase_encode(audio_copy, bits_to_encode, start_offset=start_offset)
-        elif algo_id == 1: # LSB
+        elif algo_id == 1:  # LSB (default)
             return self.algo_lsb_encode(audio_copy, bits_to_encode, start_index=start_offset)
         
         return audio_copy
 
     def generate_preview(self):
+        """
+        Generate a preview of the steganography effect without a real payload.
+        
+        This function creates a quick preview by encoding dummy random data
+        into the audio. It's used to visualize how the selected algorithm
+        affects the waveform before actually encoding a real file.
+        
+        The preview helps users understand the trade-offs of each algorithm:
+        - LSB: Almost invisible modification
+        - Echo: Visible amplitude changes where echoes are added
+        - Phase: Minimal visible change (phase is imperceptible)
+        - DSSS: Wide-spread low-amplitude noise
+        """
         if self.audio_data is None: return
         
-        # Simplified preview (dummy data)
+        # Use 512 bytes as dummy payload size for preview visualization
         dummy_len = 512
         audio_copy = self.audio_data.copy()
         algo_name = self.algo_var.get()
         start_offset = self.HEADER_OFFSET
         
-        # Just write dummy LSB header for visual confidence
-        # Use defaults for preview
+        # Create a header for the preview (same format as real encoding)
+        # This ensures the preview matches what the actual output would look like
         algo_id = 1
         p1=0; p2=0; p3=0
         if "Echo" in algo_name: 
@@ -699,14 +889,16 @@ class AudioStegoApp:
             algo_id = 3
             p1=256; p2=20
             
+        # Create and embed the header in LSB
         header = self.create_smart_header(algo_id, p1, p2, p3, dummy_len)
         header_bits = np.unpackbits(np.frombuffer(header, dtype=np.uint8))
         audio_copy[:len(header_bits)] = (audio_copy[:len(header_bits)] & ~1) | header_bits
         
-        # Generate dummy bits
+        # Generate 1000 random bits (0 or 1) as dummy payload data
         bits = np.random.randint(0, 2, 1000)
         
         try:
+            # Encode dummy bits using the selected algorithm
             if algo_id == 2:
                 self.processed_audio = self.algo_echo_encode(audio_copy, bits, start_offset=start_offset, payload_len=125)
             elif algo_id == 4:
@@ -715,68 +907,121 @@ class AudioStegoApp:
                 self.processed_audio = self.algo_phase_encode(audio_copy, bits, start_offset=start_offset)
             else:
                 self.processed_audio = self.algo_lsb_encode(audio_copy, bits, start_index=start_offset)
-                
+            
+            # Schedule UI update on the main thread (required for Tkinter)
             self.root.after(0, self.update_plots)
         except Exception as e:
             print(f"Preview Error: {e}")
 
 
-    # --- Encoding Algorithms ---
+    # =============================================================================
+    # ENCODING ALGORITHMS
+    # =============================================================================
+    # These algorithms implement different steganography techniques to hide data
+    # in audio. Each has trade-offs between capacity, robustness, and imperceptibility.
+    #
+    # Algorithm implementations inspired by the MATLAB library:
+    # https://github.com/ktekeli/audio-steganography-algorithms
+    # by Kadir Tekeli (MIT License 2016-2017)
+    # =============================================================================
 
     def algo_lsb_encode(self, audio, bits, start_index=0):
-        """LSB Encoding: Replace least significant bit."""
+        """
+        LSB (Least Significant Bit) Encoding Algorithm.
+        
+        Theory:
+        - Each 16-bit audio sample has a value from -32768 to 32767
+        - The LSB (bit 0) contributes only ±1 to the value, which is imperceptible
+        - We replace the LSB of each sample with a payload bit
+        
+        This is the simplest and highest-capacity steganography method, but it's
+        fragile - any modification to the audio (compression, normalization, etc.)
+        will destroy the hidden data.
+        
+        Args:
+            audio: Audio sample array (modified in-place)
+            bits: Array of bits (0 or 1) to embed
+            start_index: Sample index to start embedding (default: 0)
+        
+        Returns:
+            np.ndarray: Modified audio with embedded bits
+        """
         num_bits = len(bits)
         available = len(audio) - start_index
         
+        # Truncate bits if we don't have enough audio samples
         if num_bits > available:
             bits = bits[:available]
-            
+        
+        # LSB Embedding with Numpy vectorized operation:
+        # 
+        # audio[start_index:start_index+len(bits)]  - Select samples to modify
+        # & ~1                                       - Clear bit 0 (AND with ...11111110)
+        # | bits                                     - Set bit 0 to payload value (OR)
+        #
+        # This is equivalent to the loop:
+        #   for i, bit in enumerate(bits):
+        #       sample = audio[start_index + i]
+        #       audio[start_index + i] = (sample & 0xFFFE) | bit
+        #
+        # Example breakdown:
+        #   sample = 12345 (binary: 0b11000000111001)
+        #   ~1     =       (binary: 0b11111111111110)  # All 1s except bit 0
+        #   sample & ~1 = 12344                        # Clear bit 0
+        #   12344 | 1   = 12345                        # Set bit 0 to 1
+        #   12344 | 0   = 12344                        # Set bit 0 to 0
         audio[start_index:start_index+len(bits)] = (audio[start_index:start_index+len(bits)] & ~1) | bits
         return audio
 
-    def _create_mixer_signal(self, bits, chunk_size, smooth_len):
-        """Generate smooth mixer signal (Matlab port).
-        
-        Upsamples bits to chunk_size and smooths with Hanning window.
-        Returns: array of length len(bits)*chunk_size with values in [0, 1].
-        """
-        # 1. Expand bits (0/1) to square wave
-        # bits: [0, 1, 0] -> [000... 111... 000...]
-        raw_signal = np.repeat(bits, chunk_size).astype(np.float32)
-        
-        # 2. Smooth with Hanning window (Convolution)
-        # smooth_len (K) should be even for symmetry in Matlab logic, but odd is fine for numpy 'same'
-        if smooth_len < 1: smooth_len = 1
-        window = np.hanning(smooth_len)
-        
-        # Convolve (mode='same' returns centered result of same size as raw_signal)
-        smoothed = np.convolve(raw_signal, window, mode='same')
-        
-        # 3. Normalize to [0, 1]
-        mx = np.max(np.abs(smoothed))
-        if mx > 0:
-            smoothed /= mx
-            
-        # 4. Clipping/Safety (ensure strict 0-1 range)
-        return np.clip(smoothed, 0.0, 1.0)
+    # NOTE: The _create_mixer_signal function below was ported from the MATLAB
+    # library's mixer.m but is NOT currently used in this implementation.
+    # It was intended for smooth transitions between echo hiding segments.
+    # Kept for reference but could be removed to clean up the codebase.
 
     def algo_echo_encode(self, audio, bits, start_offset=1000, payload_len=None):
-        """Echo Hiding: Encode data by adding echoes at different delays.
-        
-        Each bit determines which delay is used:
-        - bit 0: echo at delay d0
-        - bit 1: echo at delay d1
         """
+        Echo Hiding Encoding Algorithm.
+        
+        Theory:
+        Echo hiding embeds data by adding a delayed copy (echo) of the audio
+        to itself. Different delay values encode different bit values.
+        Human ears perceive this as subtle reverb/room acoustics.
+        
+        Algorithm (inspired by MATLAB echo_encoding.m):
+        1. Divide audio into chunks (each chunk encodes 1 bit)
+        2. For each chunk, add an echo using convolution with an impulse response:
+           - bit 0: echo delayed by d0 samples (e.g., 50)
+           - bit 1: echo delayed by d1 samples (e.g., 200)
+        3. Echo is created using an FIR filter: [0, 0, ..., 0, alpha]
+           where the number of zeros equals the delay
+        
+        The echo kernel is an impulse response like: [0, 0, ..., 0, 0.5]
+        When convolved with audio, this adds a delayed, scaled copy of the signal.
+        
+        Decoding uses cepstrum analysis to detect which delay was used.
+        
+        Args:
+            audio: Audio sample array (will be copied, not modified in-place)
+            bits: Array of bits (0 or 1) to embed
+            start_offset: Sample index to start embedding (default: 1000)
+            payload_len: Unused, kept for API compatibility
+        
+        Returns:
+            np.ndarray: New audio array with embedded echoes
+        """
+        # Import lfilter here to avoid slow startup (lazy import)
         from scipy.signal import lfilter
         
-        chunk_size = self.echo_chunk_size.get()
-        d0 = self.echo_delay_0.get()
-        d1 = self.echo_delay_1.get()
-        alpha = self.echo_alpha.get()
+        # Get user-configurable echo parameters from UI
+        chunk_size = self.echo_chunk_size.get()  # Samples per bit (default: 2048)
+        d0 = self.echo_delay_0.get()             # Delay for bit 0 (default: 50 samples)
+        d1 = self.echo_delay_1.get()             # Delay for bit 1 (default: 200 samples)
+        alpha = self.echo_alpha.get()            # Echo strength 0.0-1.0 (default: 0.5)
         
         num_bits = len(bits)
         total_samples = num_bits * chunk_size
         
+        # Check if we have enough audio for all bits
         if start_offset + total_samples > len(audio):
             available = len(audio) - start_offset
             num_bits = available // chunk_size
@@ -784,14 +1029,24 @@ class AudioStegoApp:
             if num_bits <= 0:
                 return audio
         
-        # Echo kernels: impulse response [0, 0, ..., alpha] with delay zeros
+        # Create echo kernels (impulse responses)
+        # Each kernel is [0, 0, ..., 0, alpha] with 'delay' zeros before alpha
+        #
+        # When convolved with audio signal x[n], this produces:
+        #   y[n] = x[n-delay] * alpha
+        # which is exactly an echo delayed by 'delay' samples with amplitude 'alpha'
+        #
+        # Example: d0=50, alpha=0.5 creates kernel of length 51
+        # kernel = [0, 0, 0, ... (50 zeros) ..., 0.5]
         kernel_d0 = np.zeros(d0 + 1, dtype=np.float32)
-        kernel_d0[-1] = alpha
+        kernel_d0[-1] = alpha  # Set last element to alpha
         kernel_d1 = np.zeros(d1 + 1, dtype=np.float32)
         kernel_d1[-1] = alpha
         
+        # Work with float32 for precision during convolution
         output = audio.copy().astype(np.float32)
         
+        # Process each bit by adding echo to its corresponding chunk
         for i, bit in enumerate(bits):
             chunk_start = start_offset + i * chunk_size
             chunk_end = chunk_start + chunk_size
@@ -799,33 +1054,85 @@ class AudioStegoApp:
             if chunk_end > len(audio):
                 break
             
+            # Extract the chunk to process
             chunk = audio[chunk_start:chunk_end].astype(np.float32)
+            
+            # Select kernel based on bit value
             kernel = kernel_d0 if bit == 0 else kernel_d1
+            
+            # lfilter performs 1D convolution (FIR filtering)
+            # lfilter(b, a, x) computes: y[n] = sum(b[k] * x[n-k]) / sum(a[k] * y[n-k])
+            # With a=1.0, this simplifies to pure FIR (no feedback): y = conv(b, x)
+            # Result is the echo signal, which we add to the output
             echo = lfilter(kernel, 1.0, chunk)
             output[chunk_start:chunk_end] += echo
         
+        # Clip to int16 range and convert back to integer samples
         return np.clip(output, -32768, 32767).astype(np.int16)
 
     def algo_phase_encode(self, audio, bits, start_offset=1000):
-        """Phase Coding: Encode bits in frequency bin phases.
-        
-        Uses BPSK modulation: bit 0 -> -90°, bit 1 -> +90°
         """
-        segment_size = 256
-        start_bin = 20  # Skip low frequencies
-        bits_per_segment = 8
-        min_magnitude = 500  # Boost weak bins for reliable decoding
+        Phase Coding Encoding Algorithm.
         
+        Theory:
+        Human ears are very sensitive to amplitude and frequency changes, but
+        relatively insensitive to absolute phase of frequency components.
+        This algorithm hides data in the phase of specific frequency bins.
+        
+        Algorithm (inspired by MATLAB phase_encoding.m):
+        1. Segment audio into 256-sample blocks
+        2. Apply FFT to transform each block to frequency domain
+        3. Modify the phase angle of frequency bins 20-27 (8 bins = 8 bits/segment)
+        4. Use BPSK (Binary Phase Shift Keying) modulation:
+           - bit 0 → phase = -90° (-π/2 radians)
+           - bit 1 → phase = +90° (+π/2 radians)
+        5. Reconstruct audio using inverse FFT
+        
+        Why bins 20-27?
+        - Low bins (0-19) are skipped because they contain most audio energy
+        - Modifying them would cause audible artifacts
+        - Bins 20-27 are in the mid-frequency range where changes are less noticeable
+        
+        Hard-coded values:
+        - segment_size = 256: FFT window size (power of 2 for efficiency)
+        - start_bin = 20: First frequency bin to use for data
+        - bits_per_segment = 8: Number of bits embedded per segment
+        - min_magnitude = 500: Minimum magnitude to ensure decodability
+        
+        Args:
+            audio: Audio sample array (will be copied, not modified in-place)
+            bits: Array of bits (0 or 1) to embed
+            start_offset: Sample index to start embedding (default: 1000)
+        
+        Returns:
+            np.ndarray: New audio array with phase-encoded data
+        """
+        segment_size = 256      # FFT window size (256 samples ≈ 5.8ms at 44.1kHz)
+        start_bin = 20          # Skip bins 0-19 (low frequencies with high energy)
+        bits_per_segment = 8    # Use 8 frequency bins per segment = 1 byte
+        min_magnitude = 500     # Boost weak bins to ensure reliable decoding
+        
+        # Work with float64 for FFT precision
         output = audio.copy().astype(np.float64)
         bit_idx = 0
         pos = start_offset
         
+        # Process audio in 256-sample segments
         while bit_idx < len(bits) and pos + segment_size <= len(audio):
+            # Extract segment for processing
             segment = output[pos:pos + segment_size]
-            spectrum = np.fft.rfft(segment)
-            magnitude = np.abs(spectrum)
-            phase = np.angle(spectrum)
             
+            # Forward FFT: transform from time domain to frequency domain
+            # rfft returns only positive frequencies (symmetric for real signals)
+            # Result is array of complex numbers: magnitude + phase
+            spectrum = np.fft.rfft(segment)
+            
+            # Decompose complex spectrum into magnitude and phase components
+            # Complex number z = |z| * e^(i*θ) = magnitude * e^(i*phase)
+            magnitude = np.abs(spectrum)  # |z| = sqrt(real² + imag²)
+            phase = np.angle(spectrum)    # θ = atan2(imag, real)
+            
+            # Embed 8 bits into frequency bins 20-27
             for i in range(bits_per_segment):
                 if bit_idx >= len(bits):
                     break
@@ -833,16 +1140,29 @@ class AudioStegoApp:
                 if freq_bin >= len(magnitude):
                     break
                 
+                # Boost weak frequency bins to ensure reliable decoding
+                # If a bin has very low magnitude, phase becomes noisy
                 if magnitude[freq_bin] < min_magnitude:
                     magnitude[freq_bin] = min_magnitude
                 
+                # BPSK modulation: encode bit as phase angle
+                # bit 0 → phase = -π/2 (-90°)
+                # bit 1 → phase = +π/2 (+90°)
                 phase[freq_bin] = -np.pi/2 if bits[bit_idx] == 0 else np.pi/2
                 bit_idx += 1
             
+            # Reconstruct complex spectrum from magnitude and phase
+            # Using Euler's formula: z = magnitude * e^(i*phase)
+            # np.exp(1j * phase) creates unit complex number at angle 'phase'
+            # Multiplying by magnitude scales it to correct amplitude
             new_spectrum = magnitude * np.exp(1j * phase)
+            
+            # Inverse FFT: transform back from frequency to time domain
+            # irfft expects the positive-frequency half and reconstructs real signal
             output[pos:pos + segment_size] = np.fft.irfft(new_spectrum, n=segment_size)
             pos += segment_size
         
+        # Clip to int16 range and convert back to integer samples
         return np.clip(output, -32768, 32767).astype(np.int16)
 
     # --- Decoding Logic ---
@@ -989,54 +1309,139 @@ class AudioStegoApp:
         return None, None
 
     def algo_lsb_decode(self, audio, start_index=0):
-        """LSB Decoding: Extract least significant bit of each sample."""
+        """
+        LSB (Least Significant Bit) Decoding Algorithm.
+        
+        Extraction is the inverse of embedding:
+        - For each audio sample, extract bit 0 (the LSB)
+        - audio & 1 performs bitwise AND with 1, isolating only the LSB
+        
+        Example: 
+            sample = 12345 (binary: 0b11000000111001)
+            12345 & 1 = 1  (the LSB is 1)
+        
+        Args:
+            audio: Audio sample array to extract from
+            start_index: Sample index to start extraction (default: 0)
+        
+        Returns:
+            np.ndarray: Array of extracted bits (0 or 1)
+        """
         if start_index > 0:
+            # Extract LSB from samples starting at start_index
             return audio[start_index:] & 1
+        # Extract LSB from all samples
         return audio & 1
 
 
     def algo_echo_decode(self, audio, start_offset=1000, chunk_size=512, d0=100, d1=150):
-        """True Echo Hiding Decode: Use Cepstrum to detect echo delay.
+        """
+        Echo Hiding Decoding Algorithm using Cepstrum Analysis.
         
-        Ported from Matlab 'echo_decoding.m'.
-        Method: Real Cepstrum = IFFT(log|FFT(x)|)
-        Logic: if cepstrum[d0] >= cepstrum[d1] -> bit 0, else bit 1.
+        Theory (ported from MATLAB echo_decoding.m):
+        The cepstrum is the "spectrum of a spectrum". It reveals periodicities
+        in the frequency spectrum, which correspond to echo delays in the time domain.
+        
+        Algorithm:
+        1. For each chunk, compute the cepstrum:
+           cepstrum = |IFFT(log(|FFT(chunk)|))|
+        2. Compare cepstrum values at delay positions d0 and d1
+        3. Higher cepstrum value indicates that delay was used for the echo
+           - cepstrum[d0] >= cepstrum[d1] → bit 0
+           - cepstrum[d0] < cepstrum[d1] → bit 1
+        
+        Why cepstrum works:
+        - An echo at delay d creates a periodic ripple in the frequency spectrum
+        - The cepstrum detects this periodicity as a peak at position d
+        - We compare peaks at d0 vs d1 to determine which echo was added
+        
+        Args:
+            audio: Audio sample array to decode
+            start_offset: Sample index where payload begins (default: 1000)
+            chunk_size: Samples per bit (must match encoder)
+            d0: Delay for bit 0 (must match encoder)
+            d1: Delay for bit 1 (must match encoder)
+        
+        Returns:
+            np.ndarray: Array of decoded bits (0 or 1)
         """
         audio_length = len(audio)
         decoded_bits = []
         current_sample = start_offset
         
+        # Process each chunk to decode 1 bit
         while current_sample + chunk_size <= audio_length:
             chunk = audio[current_sample:current_sample+chunk_size]
             
-            # Real Cepstrum Calculation (Matlab Port)
-            # 1. FFT
+            # =================================================================
+            # Real Cepstrum Calculation (Matlab Port of echo_decoding.m)
+            # =================================================================
+            # Step 1: FFT - Transform chunk to frequency domain
             spectrum = np.fft.fft(chunk)
-            # 2. Log Magnitude (add epsilon to avoid log(0))
+            
+            # Step 2: Log of magnitude (add epsilon to avoid log(0))
+            # The log operation converts multiplication (convolution) to addition
+            # This separates the original signal from the echo
             log_mag = np.log(np.abs(spectrum) + 1e-8)
+            
+            # Step 3: Inverse FFT of log magnitude
+            # This gives us the cepstrum (quefrency domain)
+            # Peaks in cepstrum correspond to echo delays
             cepstrum = np.abs(np.fft.ifft(log_mag)).real
             
-            val0 = cepstrum[d0]
-            val1 = cepstrum[d1]
+            # Compare cepstrum values at the two possible delay positions
+            val0 = cepstrum[d0]  # Cepstrum value at delay d0
+            val1 = cepstrum[d1]  # Cepstrum value at delay d1
+            
+            # The delay with higher cepstrum value was used for this bit
             decoded_bits.append(0 if val0 >= val1 else 1)
             current_sample += chunk_size
             
         return np.array(decoded_bits, dtype=np.uint8)
 
     def algo_phase_decode(self, audio, start_offset=1000, segment_size=256, start_bin=20):
-        """Phase Coding Decode: Extract bits from phase angles."""
-        bits_per_segment = 8
+        """
+        Phase Coding Decoding Algorithm.
+        
+        Theory:
+        This is the inverse of phase encoding. We extract the phase angle
+        from each frequency bin and determine the encoded bit based on
+        whether the phase is positive or negative.
+        
+        Algorithm:
+        1. For each 256-sample segment, compute FFT
+        2. Extract phase angle of frequency bins 20-27
+        3. Decode bit based on phase:
+           - phase > 0 → bit 1 (was encoded as +90°)
+           - phase <= 0 → bit 0 (was encoded as -90°)
+        
+        Args:
+            audio: Audio sample array to decode
+            start_offset: Sample index where payload begins (default: 1000)
+            segment_size: FFT window size (must match encoder, default: 256)
+            start_bin: First frequency bin with data (must match encoder, default: 20)
+        
+        Returns:
+            np.ndarray: Array of decoded bits (0 or 1)
+        """
+        bits_per_segment = 8  # 8 frequency bins used per segment
         decoded_bits = []
         pos = start_offset
         
+        # Process each segment to decode 8 bits
         while pos + segment_size <= len(audio):
+            # FFT to get frequency domain representation
             spectrum = np.fft.rfft(audio[pos:pos + segment_size])
+            
+            # Extract phase angles (in radians, range -π to +π)
             phase = np.angle(spectrum)
             
+            # Decode 8 bits from frequency bins 20-27
             for i in range(bits_per_segment):
                 freq_bin = start_bin + i
                 if freq_bin >= len(phase):
                     break
+                # Positive phase was used for bit 1, negative for bit 0
                 decoded_bits.append(1 if phase[freq_bin] > 0 else 0)
             
             pos += segment_size
@@ -1044,25 +1449,57 @@ class AudioStegoApp:
         return np.array(decoded_bits, dtype=np.uint8)
 
     def algo_spread_spectrum_encode(self, audio, bits, start_offset=1000, frame_size=8192):
-        """DSSS Spread Spectrum: Encode using pseudo-random spreading.
-        
-        bit 0: subtract spread sequence from frame
-        bit 1: add spread sequence to frame
         """
-        alpha = 500.0  # Embedding strength (higher = more reliable)
+        DSSS (Direct Sequence Spread Spectrum) Encoding Algorithm.
         
+        Theory:
+        Spread spectrum hides data by spreading each bit across many samples
+        using a pseudo-random noise (PN) sequence. This makes the signal
+        appear as random noise, providing excellent robustness to attacks
+        but at the cost of very low capacity.
+        
+        Algorithm (inspired by MATLAB DSSS implementation):
+        1. Generate a deterministic PN sequence using a fixed seed
+        2. For each bit, add or subtract the PN sequence from a frame:
+           - bit 1: add (α * PN_sequence) to frame
+           - bit 0: subtract (α * PN_sequence) from frame
+        3. The decoder correlates with the same PN sequence to extract bits
+        
+        Hard-coded values:
+        - frame_size = 8192: Samples per bit (very low capacity, 1 bit per 8192 samples)
+        - seed = 12345: Fixed seed for deterministic PN sequence
+        - alpha = 500.0: Embedding strength
+        
+        Args:
+            audio: Audio sample array (will be copied, not modified in-place)
+            bits: Array of bits (0 or 1) to embed
+            start_offset: Sample index to start embedding (default: 1000)
+            frame_size: Samples per bit (default: 8192)
+        
+        Returns:
+            np.ndarray: New audio array with spread-spectrum embedded data
+        """
+        alpha = 500.0  # Embedding strength (higher = more reliable, more audible)
+        
+        # Check if we have enough audio for all bits
         if start_offset + len(bits) * frame_size > len(audio):
             available = len(audio) - start_offset
             bits = bits[:available // frame_size]
             if len(bits) <= 0:
                 return audio
         
-        # Deterministic PN sequence (same seed for encode/decode)
+        # Generate deterministic PN (Pseudo-random Noise) sequence
+        # Using fixed seed ensures encoder and decoder generate identical sequences
         rng = np.random.default_rng(seed=12345)
+        
+        # Create bipolar sequence: values are either -1 or +1
+        # rng.integers(0, 2, frame_size) generates 0s and 1s
+        # * 2 - 1 transforms: 0 → -1, 1 → +1
         spread_seq = (rng.integers(0, 2, frame_size) * 2 - 1).astype(np.float32)
         
         output = audio.copy().astype(np.float32)
         
+        # Embed each bit by adding or subtracting the PN sequence
         for i, bit in enumerate(bits):
             start = start_offset + i * frame_size
             end = start + frame_size
@@ -1070,24 +1507,61 @@ class AudioStegoApp:
                 break
             
             if bit == 1:
+                # bit 1: positive correlation with PN sequence
                 output[start:end] += alpha * spread_seq
             else:
+                # bit 0: negative correlation with PN sequence
                 output[start:end] -= alpha * spread_seq
         
         return np.clip(output, -32768, 32767).astype(np.int16)
 
     def algo_spread_spectrum_decode(self, audio, start_offset=1000, frame_size=8192):
-        """DSSS Spread Spectrum Decode: Correlate with spread sequence."""
+        """
+        DSSS (Direct Sequence Spread Spectrum) Decoding Algorithm.
+        
+        Theory:
+        Decoding uses correlation with the same PN sequence used for encoding.
+        When we multiply the audio frame by the PN sequence and sum, the
+        embedded signal reinforces (high correlation) while noise averages out.
+        
+        Algorithm:
+        1. Generate the same PN sequence (same seed as encoder)
+        2. For each frame, compute correlation: sum(frame * PN_sequence) / frame_size
+        3. The sign of the correlation determines the bit:
+           - correlation >= 0 → bit 1 (positive correlation = PN was added)
+           - correlation < 0 → bit 0 (negative correlation = PN was subtracted)
+        
+        Why this works:
+        - If PN was added: frame ≈ original + α*PN
+          Correlation = (original + α*PN) · PN ≈ 0 + α*(PN · PN) = positive
+        - If PN was subtracted: frame ≈ original - α*PN
+          Correlation = (original - α*PN) · PN ≈ 0 - α*(PN · PN) = negative
+        
+        Args:
+            audio: Audio sample array to decode
+            start_offset: Sample index where payload begins (default: 1000)
+            frame_size: Samples per bit (must match encoder, default: 8192)
+        
+        Returns:
+            np.ndarray: Array of decoded bits (0 or 1)
+        """
         decoded_bits = []
         
-        # Same PN sequence as encoder
+        # Regenerate the exact same PN sequence used by encoder
         rng = np.random.default_rng(seed=12345)
         spread_seq = (rng.integers(0, 2, frame_size) * 2 - 1).astype(np.float32)
         
         pos = start_offset
         while pos + frame_size <= len(audio):
+            # Extract frame for this bit
             frame = audio[pos:pos + frame_size].astype(np.float32)
+            
+            # Compute correlation: dot product of frame and PN sequence
+            # Divide by frame_size to normalize (optional for comparison)
             correlation = np.sum(frame * spread_seq) / frame_size
+            
+            # Positive correlation means PN was added (bit 1)
+            # Negative correlation means PN was subtracted (bit 0)
             decoded_bits.append(1 if correlation >= 0 else 0)
             pos += frame_size
         
