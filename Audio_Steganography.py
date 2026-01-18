@@ -33,13 +33,12 @@ class AudioStegoApp:
         screen_width = root.winfo_screenwidth()
         screen_height = root.winfo_screenheight()
         
-        # Use 70% of screen size, with min/max bounds
         win_width = int(screen_width * 0.5)
-        win_height = int(screen_height * 0.85)
+        win_height = int(screen_height * 0.9)
         
-        # Center the window on screen
+        # Center horizontally, align top vertically
         x_pos = (screen_width - win_width) // 2
-        y_pos = (screen_height - win_height) // 2
+        y_pos = 0
         
         self.root.geometry(f"{win_width}x{win_height}+{x_pos}+{y_pos}")
         self.root.minsize(800, 650)
@@ -54,6 +53,17 @@ class AudioStegoApp:
         style.configure("Header.TLabel", font=("Segoe UI", 18, "bold"))
         style.configure("SubHeader.TLabel", font=("Segoe UI", 10))
         style.configure("Bold.TLabel", font=("Segoe UI", 10, "bold"))
+        
+        # Standard DPI is 96. If we detect high DPI (>1.2x), use larger arrows.
+        try:
+            dpi_scale = self.root.winfo_fpixels('1i') / 96.0
+        except Exception:
+            dpi_scale = 1.0
+            
+        arrow_size = 25 if dpi_scale > 1.2 else 12
+        
+        style.configure("TCombobox", arrowsize=arrow_size)
+        style.configure("TSpinbox", arrowsize=arrow_size)
         
         # Colors
         self.bg_color = "#f4f4f4"
@@ -108,8 +118,53 @@ class AudioStegoApp:
         self.create_widgets()
 
     def create_widgets(self):
-        # Main container with padding
-        main_container = ttk.Frame(self.root)
+        # Create a container for the scrollbar and canvas
+        container = ttk.Frame(self.root)
+        container.pack(fill="both", expand=True)
+        
+        # Create Canvas and Scrollbar
+        self.canvas_scroll = tk.Canvas(container, highlightthickness=0)
+        scrollbar = ttk.Scrollbar(container, orient="vertical", command=self.canvas_scroll.yview)
+        
+        # Create a frame inside the canvas
+        self.scrollable_frame = ttk.Frame(self.canvas_scroll)
+        
+        # Configure scroll region when the frame size changes
+        self.scrollable_frame.bind(
+            "<Configure>",
+            lambda e: self.canvas_scroll.configure(scrollregion=self.canvas_scroll.bbox("all"))
+        )
+        
+        # Add the frame to the canvas
+        self.canvas_window_id = self.canvas_scroll.create_window((0, 0), window=self.scrollable_frame, anchor="nw")
+        
+        # Configure the scrollbar
+        self.canvas_scroll.configure(yscrollcommand=scrollbar.set)
+        
+        # Layout Canvas and Scrollbar
+        self.canvas_scroll.pack(side="left", fill="both", expand=True)
+        scrollbar.pack(side="right", fill="y")
+        
+        # Mousewheel scrolling (Windows/MacOS)
+        def _on_mousewheel(event):
+            # Only scroll if content is larger than window
+            if self.scrollable_frame.winfo_height() > self.canvas_scroll.winfo_height():
+                self.canvas_scroll.yview_scroll(int(-1*(event.delta/120)), "units")
+                
+        # Bind mousewheel to the root
+        self.root.bind_all("<MouseWheel>", _on_mousewheel)
+        
+        # Resize the inner frame to match canvas width (responsiveness)
+        def _on_canvas_configure(event):
+            self.canvas_scroll.itemconfig(self.canvas_window_id, width=event.width)
+            
+        self.canvas_scroll.bind("<Configure>", _on_canvas_configure)
+
+        # Helper method for scroll sensitivity (optional)
+        # self.canvas_scroll.configure(yscrollincrement=5)
+
+        # Main content container (now inside scrollable_frame)
+        main_container = ttk.Frame(self.scrollable_frame)
         main_container.pack(fill="both", expand=True, padx=15, pady=15)
 
         # --- Header ---
@@ -269,27 +324,25 @@ class AudioStegoApp:
         plot_frame = ttk.LabelFrame(self.tab_encode, text=" Visualization ", padding=5)
         plot_frame.grid(row=3, column=0, sticky="nsew", padx=10, pady=10)
         
-        self.fig, (self.ax1, self.ax2) = plt.subplots(2, 1, figsize=(5, 4), dpi=100)
+        self.fig, (self.ax1, self.ax2) = plt.subplots(2, 1, figsize=(5, 5), dpi=100)
         self.fig.patch.set_facecolor(self.bg_color)
         self.fig.tight_layout(pad=3.0)
         
         self.canvas = FigureCanvasTkAgg(self.fig, master=plot_frame)
-        self.canvas.get_tk_widget().pack(fill="both", expand=True)
+        self.canvas.draw()
+        
+        # Pack canvas first taking all available space
+        self.canvas.get_tk_widget().pack(fill="both", expand=True, side="top")
 
-        # Add Interactive Toolbar
+        # Add Interactive Toolbar (packs itself to bottom by default)
         self.toolbar = NavigationToolbar2Tk(self.canvas, plot_frame)
         self.toolbar.update()
-        self.canvas.get_tk_widget().pack(fill="both", expand=True)
 
         self.reset_plots()
         
     def on_algo_change(self, event):
         self.update_capacity_check()
         self.update_algo_description()
-        # Auto-update preview if possible
-        if self.audio_data is not None:
-             # Use a thread to avoid freezing UI for large files
-             threading.Thread(target=self.generate_preview, daemon=True).start()
 
 
     
@@ -445,8 +498,6 @@ class AudioStegoApp:
                 self.processed_audio = None 
                 self.update_capacity_check()
                 self.update_plots()
-                # Trigger auto-preview
-                threading.Thread(target=self.generate_preview, daemon=True).start()
             except Exception as e:
                 messagebox.showerror("Error", str(e))
 
@@ -457,8 +508,6 @@ class AudioStegoApp:
             size_kb = os.path.getsize(path) / 1024
             self.lbl_payload.config(text=f"{os.path.basename(path)} ({size_kb:.2f} KB)", foreground="#28a745")
             self.update_capacity_check()
-            # Trigger auto-preview
-            threading.Thread(target=self.generate_preview, daemon=True).start()
 
     def load_decode_audio(self):
         path = filedialog.askopenfilename(filetypes=[("WAV files", "*.wav")])
@@ -1580,6 +1629,13 @@ class AudioStegoApp:
             self.update_plots()
         else:
             data = self.process_steganography()
+            
+            # Fallback: If no payload is selected (data is None), generate a dummy preview
+            # This allows the user to see/hear the effect of the algorithm without a file.
+            if data is None:
+                self.generate_preview() # Encodes dummy data and sets self.processed_audio
+                data = self.processed_audio
+                
             if data is None: return
             self.processed_audio = data
             self.update_plots()
